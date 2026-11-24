@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,20 +34,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import com.pixelkeys.ime.data.local.ClipboardDao
 import com.pixelkeys.ime.data.local.ClipboardItemEntity
 import com.pixelkeys.ime.data.prefs.KeyboardPreferences
@@ -58,6 +66,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+
+private data class KeyPreviewState(
+    val keyId: String,
+    val text: String,
+    val centerX: Int,
+    val topY: Int,
+    val isSecondary: Boolean
+)
 
 @Composable
 fun PixelKeysBoard(
@@ -108,11 +124,16 @@ fun PixelKeysBoard(
         OneHandedMode.NONE -> Alignment.Center
     }
 
+    var rootCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var activePreview by remember { mutableStateOf<KeyPreviewState?>(null) }
+    val density = LocalDensity.current
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .background(theme.boardBackground)
-            .padding(bottom = 8.dp),
+            .padding(bottom = 8.dp)
+            .onGloballyPositioned { rootCoords = it },
         contentAlignment = boardAlignment
     ) {
         Column(modifier = Modifier.fillMaxWidth(boardWidthFraction)) {
@@ -164,6 +185,7 @@ fun PixelKeysBoard(
                                 keyFontSizeSp = prefs.keyFontSizeSp,
                                 isTrackpadMode = isTrackpadMode,
                                 shiftState = shiftState,
+                                rootCoordsProvider = { rootCoords },
                                 modifier = Modifier
                                     .weight(key.weight)
                                     .height(keyHeight),
@@ -172,11 +194,50 @@ fun PixelKeysBoard(
                                 onBackspaceRepeatTick = { controller.onBackspaceRepeatTick() },
                                 onTrackpadStart = { controller.onTrackpadStart() },
                                 onTrackpadDrag = { controller.onTrackpadDrag(it) },
-                                onTrackpadEnd = { controller.onTrackpadEnd() }
+                                onTrackpadEnd = { controller.onTrackpadEnd() },
+                                onPreviewShow = { preview -> activePreview = preview },
+                                onPreviewHide = { id ->
+                                    if (activePreview?.keyId == id) {
+                                        activePreview = null
+                                    }
+                                }
                             )
                         }
                     }
                 }
+            }
+        }
+
+        // Single zero-lag Compose key preview bubble (no Android WindowManager Popup overhead)
+        activePreview?.let { preview ->
+            val bubbleW = 46.dp
+            val bubbleH = 46.dp
+            val bubbleWPx = with(density) { bubbleW.roundToPx() }
+            val bubbleHPx = with(density) { bubbleH.roundToPx() }
+            val gapPx = with(density) { 4.dp.roundToPx() }
+            val rootW = rootCoords?.size?.width ?: 1080
+            val offsetX = (preview.centerX - bubbleWPx / 2).coerceIn(4, (rootW - bubbleWPx - 4).coerceAtLeast(4))
+            val offsetY = (preview.topY - bubbleHPx - gapPx).coerceAtLeast(2)
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset { IntOffset(offsetX, offsetY) }
+                    .zIndex(20f)
+                    .size(width = bubbleW, height = bubbleH)
+                    .shadow(6.dp, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (preview.isSecondary) theme.accentColor else theme.keySurface)
+                    .border(1.5.dp, theme.accentColor, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = preview.text,
+                    color = if (preview.isSecondary) Color.White else theme.keyText,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = theme.keyFontFamily()
+                )
             }
         }
     }
@@ -271,17 +332,30 @@ private fun KeyCap(
     keyFontSizeSp: Float,
     isTrackpadMode: Boolean,
     shiftState: ShiftState,
+    rootCoordsProvider: () -> LayoutCoordinates?,
     modifier: Modifier = Modifier,
     onTap: () -> Unit,
     onSecondaryTap: (String) -> Unit,
     onBackspaceRepeatTick: () -> Unit,
     onTrackpadStart: () -> Unit,
     onTrackpadDrag: (Float) -> Unit,
-    onTrackpadEnd: () -> Unit
+    onTrackpadEnd: () -> Unit,
+    onPreviewShow: (KeyPreviewState) -> Unit,
+    onPreviewHide: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var isPressed by remember { mutableStateOf(false) }
-    var isLongPressed by remember { mutableStateOf(false) }
+    var keyCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    val currentKey by rememberUpdatedState(key)
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnSecondaryTap by rememberUpdatedState(onSecondaryTap)
+    val currentOnBackspaceRepeatTick by rememberUpdatedState(onBackspaceRepeatTick)
+    val currentOnTrackpadStart by rememberUpdatedState(onTrackpadStart)
+    val currentOnTrackpadDrag by rememberUpdatedState(onTrackpadDrag)
+    val currentOnTrackpadEnd by rememberUpdatedState(onTrackpadEnd)
+    val currentOnPreviewShow by rememberUpdatedState(onPreviewShow)
+    val currentOnPreviewHide by rememberUpdatedState(onPreviewHide)
 
     val shape = if (key.type == KeyType.ACTION) CircleShape else RoundedCornerShape(theme.keyCornerRadiusDp.dp)
     val baseBg = when (key.type) {
@@ -299,8 +373,35 @@ private fun KeyCap(
     }
     val textColor = if (key.type == KeyType.ACTION) Color.White else theme.keyText
 
+    fun updatePreview(isSecondary: Boolean) {
+        val kSpec = currentKey
+        if (kSpec.type != KeyType.CHAR) return
+        val kCoords = keyCoords
+        val rCoords = rootCoordsProvider()
+        if (kCoords != null && rCoords != null && kCoords.isAttached && rCoords.isAttached) {
+            val pos = rCoords.localPositionOf(kCoords, Offset.Zero)
+            val text = if (isSecondary && kSpec.secondaryLabel != null) kSpec.secondaryLabel else kSpec.label
+            currentOnPreviewShow(
+                KeyPreviewState(
+                    keyId = kSpec.id,
+                    text = text,
+                    centerX = (pos.x + kCoords.size.width / 2f).roundToInt(),
+                    topY = pos.y.roundToInt(),
+                    isSecondary = isSecondary
+                )
+            )
+        }
+    }
+
     Box(
         modifier = modifier
+            .onGloballyPositioned { keyCoords = it }
+            .graphicsLayer {
+                val scale = if (isPressed) 1.04f else 1f
+                scaleX = scale
+                scaleY = scale
+                translationY = if (isPressed) -3f else 0f
+            }
             .clip(shape)
             .background(bgColor)
             .border(
@@ -312,99 +413,76 @@ private fun KeyCap(
                 },
                 shape = shape
             )
-            .pointerInput(key.id, key.label, key.secondaryLabel) {
+            .pointerInput(key.id) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     isPressed = true
-                    isLongPressed = false
-
+                    var isLongPressed = false
                     var trackpadActive = false
                     var lastX = down.position.x
+                    updatePreview(isSecondary = false)
 
                     val longPressJob = scope.launch {
+                        val kSpec = currentKey
                         when {
-                            key.type == KeyType.BACKSPACE -> {
-                                delay(360L)
+                            kSpec.type == KeyType.BACKSPACE -> {
+                                delay(340L)
                                 isLongPressed = true
                                 while (true) {
-                                    onBackspaceRepeatTick()
-                                    delay(50L)
+                                    currentOnBackspaceRepeatTick()
+                                    delay(45L)
                                 }
                             }
-                            key.type == KeyType.CHAR && key.secondaryLabel != null -> {
-                                delay(320L)
+                            kSpec.type == KeyType.CHAR && kSpec.secondaryLabel != null -> {
+                                delay(300L)
                                 isLongPressed = true
+                                updatePreview(isSecondary = true)
                             }
-                            key.type == KeyType.SPACE -> {
-                                delay(280L)
+                            kSpec.type == KeyType.SPACE -> {
+                                delay(260L)
                                 isLongPressed = true
                                 trackpadActive = true
-                                onTrackpadStart()
+                                currentOnTrackpadStart()
                             }
                         }
                     }
 
-                    if (key.type == KeyType.SPACE) {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null || !change.pressed) {
-                                break
+                    try {
+                        if (currentKey.type == KeyType.SPACE) {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed) {
+                                    break
+                                }
+                                val dx = change.position.x - lastX
+                                lastX = change.position.x
+                                if (trackpadActive && dx != 0f) {
+                                    change.consume()
+                                    currentOnTrackpadDrag(dx)
+                                }
                             }
-                            val dx = change.position.x - lastX
-                            lastX = change.position.x
-                            if (trackpadActive && dx != 0f) {
-                                change.consume()
-                                onTrackpadDrag(dx)
-                            }
+                        } else {
+                            waitForUpOrCancellation()
                         }
-                    } else {
-                        waitForUpOrCancellation()
+                    } finally {
+                        longPressJob.cancel()
+                        isPressed = false
+                        currentOnPreviewHide(currentKey.id)
                     }
 
-                    longPressJob.cancel()
-                    val wasLongPressed = isLongPressed
-                    isPressed = false
-                    isLongPressed = false
-
+                    val secLabel = currentKey.secondaryLabel
                     if (trackpadActive) {
-                        onTrackpadEnd()
-                    } else if (wasLongPressed && key.type == KeyType.CHAR && key.secondaryLabel != null) {
-                        onSecondaryTap(key.secondaryLabel)
-                    } else if (!wasLongPressed) {
-                        onTap()
+                        currentOnTrackpadEnd()
+                    } else if (isLongPressed && currentKey.type == KeyType.CHAR && secLabel != null) {
+                        currentOnSecondaryTap(secLabel)
+                    } else if (!isLongPressed) {
+                        currentOnTap()
                     }
                 }
             },
         contentAlignment = Alignment.Center
     ) {
-        // Floating Key Preview Popup for instant interactive feedback
-        if (isPressed && key.type == KeyType.CHAR) {
-            val previewText = if (isLongPressed && key.secondaryLabel != null) key.secondaryLabel else key.label
-            Popup(
-                alignment = Alignment.TopCenter,
-                offset = IntOffset(0, -140)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 50.dp, height = 56.dp)
-                        .shadow(8.dp, RoundedCornerShape(12.dp))
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isLongPressed) theme.accentColor else theme.keySurface)
-                        .border(1.5.dp, theme.accentColor, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = previewText,
-                        color = if (isLongPressed) Color.White else theme.keyText,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = theme.keyFontFamily()
-                    )
-                }
-            }
-        }
-
         if (isTrackpadMode && key.type != KeyType.SPACE) {
             Text(
                 text = "•",
