@@ -91,12 +91,13 @@ fun PixelKeysBoard(
         controller.uiState.map { it.isTrackpadMode }.distinctUntilChanged()
     }.collectAsState(initial = false)
 
-    val rows = remember(prefs.activeLanguage, layer, shiftState, prefs.showNumberRow) {
+    val rows = remember(prefs.activeLanguage, layer, shiftState, prefs.showNumberRow, prefs.showEmojiKey) {
         KeyboardLayouts.getRows(
             language = prefs.activeLanguage,
             layer = layer,
             shiftState = shiftState,
-            showNumberRow = prefs.showNumberRow
+            showNumberRow = prefs.showNumberRow,
+            showEmojiKey = prefs.showEmojiKey
         )
     }
 
@@ -286,7 +287,7 @@ private fun KeyCap(
     val baseBg = when (key.type) {
         KeyType.ACTION -> theme.actionSurface
         KeyType.SHIFT -> if (shiftState != ShiftState.OFF) theme.accentColor.copy(alpha = 0.25f) else theme.modifierSurface
-        KeyType.BACKSPACE, KeyType.SYMBOLS, KeyType.LANGUAGE -> theme.modifierSurface
+        KeyType.BACKSPACE, KeyType.SYMBOLS, KeyType.EMOJI, KeyType.LANGUAGE -> theme.modifierSurface
         KeyType.SPACE -> if (isTrackpadMode) theme.accentColor.copy(alpha = 0.22f) else theme.keySurface
         KeyType.CHAR -> theme.keySurface
     }

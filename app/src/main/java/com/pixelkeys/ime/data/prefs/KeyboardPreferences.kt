@@ -39,6 +39,7 @@ data class KeyboardPreferences(
     val keyFontSizeSp: Float = 19f,
     val oneHandedMode: OneHandedMode = OneHandedMode.NONE,
     val showNumberRow: Boolean = false,
+    val showEmojiKey: Boolean = true,
     val hapticStrengthMs: Int = 18,
     val hapticStyle: HapticStyle = HapticStyle.CRISP,
     val soundEnabled: Boolean = false,
@@ -55,6 +56,7 @@ class PreferencesRepository(private val context: Context) {
         val KEY_FONT_SIZE = floatPreferencesKey("key_font_size_sp")
         val ONE_HANDED = stringPreferencesKey("one_handed_mode")
         val SHOW_NUMBER_ROW = booleanPreferencesKey("show_number_row")
+        val SHOW_EMOJI_KEY = booleanPreferencesKey("show_emoji_key")
         val HAPTIC_MS = intPreferencesKey("haptic_strength_ms")
         val HAPTIC_STYLE = stringPreferencesKey("haptic_style")
         val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
@@ -75,6 +77,7 @@ class PreferencesRepository(private val context: Context) {
                 OneHandedMode.valueOf(prefs[Keys.ONE_HANDED] ?: OneHandedMode.NONE.name)
             }.getOrDefault(OneHandedMode.NONE),
             showNumberRow = prefs[Keys.SHOW_NUMBER_ROW] ?: false,
+            showEmojiKey = prefs[Keys.SHOW_EMOJI_KEY] ?: true,
             hapticStrengthMs = (prefs[Keys.HAPTIC_MS] ?: 18).coerceIn(0, 50),
             hapticStyle = runCatching {
                 HapticStyle.valueOf(prefs[Keys.HAPTIC_STYLE] ?: HapticStyle.CRISP.name)
@@ -115,6 +118,10 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setShowNumberRow(show: Boolean) {
         context.dataStore.edit { it[Keys.SHOW_NUMBER_ROW] = show }
+    }
+
+    suspend fun setShowEmojiKey(show: Boolean) {
+        context.dataStore.edit { it[Keys.SHOW_EMOJI_KEY] = show }
     }
 
     suspend fun setHapticStrength(ms: Int) {

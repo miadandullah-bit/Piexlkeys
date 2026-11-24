@@ -148,13 +148,8 @@ fun EmojiKaomojiDrawer(
     onSelect: (String) -> Unit
 ) {
     var tab by remember { mutableIntStateOf(0) }
-    val emojis = remember {
-        listOf(
-            "😀", "😂", "🥹", "😍", "🤩", "😎", "🤔", "😴",
-            "🔥", "✨", "❤️", "💯", "👍", "🙏", "🎉", "🚀",
-            "🇧🇩", "🎹", "⚡", "🌙", "☕", "🎧", "💻", "📱"
-        )
-    }
+    var selectedCategoryIdx by remember { mutableIntStateOf(0) }
+    val categories = EmojiCatalog.categories
     val kaomojis = remember {
         listOf(
             "¯\\_(ツ)_/¯", "(•‿•)", "(╯°□°)╯︵ ┻━┻", "┬─┬ノ( º _ ºノ)",
@@ -169,7 +164,7 @@ fun EmojiKaomojiDrawer(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(210.dp)
+            .height(230.dp)
             .background(theme.boardBackground)
             .padding(8.dp)
     ) {
@@ -192,24 +187,53 @@ fun EmojiKaomojiDrawer(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
         when (tab) {
-            0 -> LazyVerticalGrid(
-                columns = GridCells.Fixed(6),
-                contentPadding = PaddingValues(4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(emojis) { emoji ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(theme.keySurface)
-                            .clickable { onSelect(emoji) }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(emoji, fontSize = 20.sp)
+            0 -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categories.forEachIndexed { idx, cat ->
+                        val active = selectedCategoryIdx == idx
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (active) theme.accentColor.copy(alpha = 0.25f) else theme.keySurface)
+                                .border(
+                                    1.dp,
+                                    if (active) theme.accentColor else theme.borderColor,
+                                    RoundedCornerShape(6.dp)
+                                )
+                                .clickable { selectedCategoryIdx = idx }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "${cat.icon} ${cat.id}",
+                                color = theme.keyText,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(7),
+                    contentPadding = PaddingValues(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    items(categories[selectedCategoryIdx].emojis) { emoji ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(theme.keySurface)
+                                .clickable { onSelect(emoji) }
+                                .padding(vertical = 7.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(emoji, fontSize = 20.sp)
+                        }
                     }
                 }
             }

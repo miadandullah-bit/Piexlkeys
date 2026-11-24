@@ -79,6 +79,7 @@ class KeyboardController(
             KeyType.SHIFT -> handleShiftTap()
             KeyType.BACKSPACE -> handleBackspace()
             KeyType.SYMBOLS -> handleSymbolsToggle(key.id)
+            KeyType.EMOJI -> openDrawer(UtilityDrawer.EMOJI_KAOMOJI)
             KeyType.LANGUAGE -> handleLanguageCycle()
             KeyType.SPACE -> handleSpaceTap()
             KeyType.ACTION -> handleActionTap()

@@ -588,6 +588,9 @@ private fun HapticsAndLayoutTab(
             SettingToggleRow("Show Number Row", prefs.showNumberRow) {
                 scope.launch { repo.setShowNumberRow(it) }
             }
+            SettingToggleRow("Show Dedicated Emoji Key", prefs.showEmojiKey) {
+                scope.launch { repo.setShowEmojiKey(it) }
+            }
             SettingToggleRow("Autocorrect (Close English Words Only)", prefs.autocorrectEnabled) {
                 scope.launch { repo.setAutocorrectEnabled(it) }
             }

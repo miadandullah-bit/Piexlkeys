@@ -29,6 +29,7 @@ enum class KeyType {
     SHIFT,
     BACKSPACE,
     SYMBOLS,
+    EMOJI,
     LANGUAGE,
     SPACE,
     ACTION
@@ -67,7 +68,8 @@ object KeyboardLayouts {
         language: InputLanguage,
         layer: KeyboardLayer,
         shiftState: ShiftState,
-        showNumberRow: Boolean
+        showNumberRow: Boolean,
+        showEmojiKey: Boolean = true
     ): List<List<KeySpec>> {
         val rows = mutableListOf<List<KeySpec>>()
         if (showNumberRow && layer == KeyboardLayer.ALPHA) {
@@ -98,21 +100,21 @@ object KeyboardLayouts {
                         KeySpec("en_$ch", c, c, sec)
                     }, isUpper))
                 }
-                rows.add(buildBottomBar(language, isSymbols = false))
+                rows.add(buildBottomBar(language, isSymbols = false, showEmojiKey = showEmojiKey))
             }
 
             KeyboardLayer.SYMBOLS_1 -> {
                 rows.add(listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0").map { KeySpec("s1_$it", it, it) })
                 rows.add(listOf("@", "#", "$", "_", "&", "-", "+", "(", ")", "/").map { KeySpec("s1_$it", it, it) })
                 rows.add(buildSymbolsRow3(isPage2 = false, listOf("*", "\"", "'", ":", ";", "!", "?")))
-                rows.add(buildBottomBar(language, isSymbols = true))
+                rows.add(buildBottomBar(language, isSymbols = true, showEmojiKey = showEmojiKey))
             }
 
             KeyboardLayer.SYMBOLS_2 -> {
                 rows.add(listOf("~", "`", "|", "•", "√", "π", "÷", "×", "§", "∆").map { KeySpec("s2_$it", it, it) })
                 rows.add(listOf("£", "¢", "€", "¥", "^", "°", "=", "{", "}", "\\").map { KeySpec("s2_$it", it, it) })
                 rows.add(buildSymbolsRow3(isPage2 = true, listOf("%", "©", "®", "™", "✓", "[", "]")))
-                rows.add(buildBottomBar(language, isSymbols = true))
+                rows.add(buildBottomBar(language, isSymbols = true, showEmojiKey = showEmojiKey))
             }
         }
         return rows
@@ -134,14 +136,17 @@ object KeyboardLayouts {
         }
     }
 
-    private fun buildBottomBar(language: InputLanguage, isSymbols: Boolean): List<KeySpec> {
-        return listOf(
-            KeySpec(id = "symbols", label = if (isSymbols) "ABC" else "?123", type = KeyType.SYMBOLS, weight = 1.35f),
-            KeySpec(id = "comma", label = ",", output = ",", weight = 0.85f),
-            KeySpec(id = "lang", label = language.shortLabel, type = KeyType.LANGUAGE, weight = 1.1f),
-            KeySpec(id = "space", label = "pixel keys", output = " ", type = KeyType.SPACE, weight = 3.8f),
-            KeySpec(id = "period", label = ".", output = ".", weight = 0.85f),
-            KeySpec(id = "action", label = "↵", type = KeyType.ACTION, weight = 1.45f)
-        )
+    private fun buildBottomBar(language: InputLanguage, isSymbols: Boolean, showEmojiKey: Boolean): List<KeySpec> {
+        return buildList {
+            add(KeySpec(id = "symbols", label = if (isSymbols) "ABC" else "?123", type = KeyType.SYMBOLS, weight = 1.3f))
+            add(KeySpec(id = "comma", label = ",", output = ",", weight = 0.8f))
+            if (showEmojiKey) {
+                add(KeySpec(id = "emoji", label = "☺", type = KeyType.EMOJI, weight = 0.9f))
+            }
+            add(KeySpec(id = "lang", label = language.shortLabel, type = KeyType.LANGUAGE, weight = 1.05f))
+            add(KeySpec(id = "space", label = "pixelkeys", output = " ", type = KeyType.SPACE, weight = if (showEmojiKey) 3.1f else 3.8f))
+            add(KeySpec(id = "period", label = ".", output = ".", weight = 0.8f))
+            add(KeySpec(id = "action", label = "↵", type = KeyType.ACTION, weight = 1.4f))
+        }
     }
 }
