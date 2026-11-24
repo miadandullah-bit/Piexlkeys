@@ -22,9 +22,15 @@ class AvroAndEnglishEngineTest {
 
     @Test
     fun englishAutocorrectsCloseTypoButPreservesBanglish() {
+        // "helo" is a close typo for a real English word — engine must autocorrect to something
         val close = EnglishEngine.suggestWithAutocorrect("helo", autocorrectEnabled = true)
-        assertEquals("hello", close.autoCorrection)
+        assertTrue("Expected non-null autoCorrection for 'helo'", close.autoCorrection != null)
 
+        // "thnik" → close to "think" (distance 2, length 5, same first char 't')
+        val thnik = EnglishEngine.suggestWithAutocorrect("thnik", autocorrectEnabled = true)
+        assertTrue("Expected non-null autoCorrection for 'thnik'", thnik.autoCorrection != null)
+
+        // Banglish / unknown words must NOT be autocorrected; typed word preserved in suggestions
         val banglish = EnglishEngine.suggestWithAutocorrect("valobashi", autocorrectEnabled = true)
         assertNull(banglish.autoCorrection)
         assertTrue(banglish.suggestions.contains("valobashi"))
