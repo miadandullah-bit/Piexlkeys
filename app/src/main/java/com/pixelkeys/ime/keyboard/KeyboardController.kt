@@ -52,6 +52,21 @@ class KeyboardController(
         _uiState.update { it.copy(userWords = words) }
     }
 
+    fun resetSession() {
+        trackpadAccumulatedPx = 0f
+        _uiState.update {
+            it.copy(
+                composingWord = "",
+                suggestions = emptyList(),
+                pendingAutoCorrection = null,
+                isTrackpadMode = false,
+                swipePoints = emptyList(),
+                shiftState = ShiftState.OFF,
+                activeDrawer = UtilityDrawer.NONE
+            )
+        }
+    }
+
     fun onKeyTap(key: KeySpec) {
         hapticController.performKeyPress(
             durationMs = currentPrefs.hapticStrengthMs,
