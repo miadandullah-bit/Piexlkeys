@@ -2,91 +2,196 @@ package com.pixelkeys.ime.ai
 
 import com.pixelkeys.ime.data.local.CustomThemeEntity
 import com.pixelkeys.ime.theme.KeyTypographyStyle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 
-/**
- * AI Repository for Theme Generation and EN<->BN Translation.
- * Uses deterministic smart synthesis offline and can be wired to Firebase AI Logic
- * once google-services.json is provisioned.
- */
+@Serializable
+private data class GeminiThemePayload(
+    val name: String = "Gemini Theme",
+    val boardBg: String = "#121214",
+    val keyBg: String = "#1E1E22",
+    val modifierBg: String = "#2A2A30",
+    val actionBg: String = "#D71921",
+    val keyText: String = "#FFFFFF",
+    val secondaryText: String = "#8E8E93",
+    val accent: String = "#D71921",
+    val border: String = "#33333A",
+    val cornerRadiusDp: Float = 10f,
+    val isHardwareBevel: Boolean = false,
+    val typographyStyle: String = "DOT_MATRIX",
+    val isDark: Boolean = true
+)
+
 object AiRepository {
 
-    fun generateThemeFromPrompt(prompt: String): CustomThemeEntity {
-        val p = prompt.lowercase()
-        val id = "ai_${UUID.randomUUID().toString().take(8)}"
+    private val json = Json { ignoreUnknownKeys = true }
 
-        return when {
-            "matcha" in p || "green" in p || "paper" in p -> CustomThemeEntity(
-                id = id,
-                name = prompt.trim().take(24).ifBlank { "Matcha Paper" },
-                prompt = prompt,
-                boardBgArgb = 0xFFEDEFE6,
-                keyBgArgb = 0xFFFAFBF7,
-                modifierBgArgb = 0xFFD9DFCE,
-                actionBgArgb = 0xFF4A6B46,
-                keyTextArgb = 0xFF232B21,
-                secondaryTextArgb = 0xFF667362,
-                accentArgb = 0xFF4A6B46,
-                borderArgb = 0xFFC8D0BC,
-                cornerRadiusDp = 10f,
-                isHardwareBevel = true,
-                typographyStyle = KeyTypographyStyle.HARDWARE_MONO.name,
-                isDark = false
+    suspend fun generateThemeWithGemini(
+        prompt: String,
+        apiKey: String
+    ): Result<CustomThemeEntity> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Add your Gemini API key first (free at aistudio.google.com/apikey).")
             )
+        }
 
-            "cyber" in p || "neon" in p || "amber" in p || "tokyo" in p -> CustomThemeEntity(
-                id = id,
-                name = prompt.trim().take(24).ifBlank { "Tokyo Amber" },
-                prompt = prompt,
-                boardBgArgb = 0xFF0A0B0E,
-                keyBgArgb = 0xFF151821,
-                modifierBgArgb = 0xFF1E2230,
-                actionBgArgb = 0xFFFF9F1C,
-                keyTextArgb = 0xFFFFD166,
-                secondaryTextArgb = 0xFF7D8597,
-                accentArgb = 0xFFFF9F1C,
-                borderArgb = 0xFF2B3245,
-                cornerRadiusDp = 8f,
-                isHardwareBevel = false,
-                typographyStyle = KeyTypographyStyle.DOT_MATRIX.name,
-                isDark = true
-            )
+        runCatching {
+            val systemPrompt = """
+                You are an expert Android keyboard UI theme designer.
+                Given a user's theme prompt, return ONLY a valid JSON object with high-contrast, legible colors:
+                {
+                  "name": "Short 2-3 word theme name",
+                  "boardBg": "#RRGGBB",
+                  "keyBg": "#RRGGBB",
+                  "modifierBg": "#RRGGBB",
+                  "actionBg": "#RRGGBB",
+                  "keyText": "#RRGGBB",
+                  "secondaryText": "#RRGGBB",
+                  "accent": "#RRGGBB",
+                  "border": "#RRGGBB",
+                  "cornerRadiusDp": 10.0,
+                  "isHardwareBevel": false,
+                  "typographyStyle": "DOT_MATRIX",
+                  "isDark": true
+                }
+                Rules:
+                - Ensure keyText has strong contrast against keyBg and modifierBg.
+                - typographyStyle must be one of: DOT_MATRIX, HARDWARE_MONO, CLEAN_SANS.
+                - cornerRadiusDp must be between 4 and 18.
+                User prompt: $prompt
+            """.trimIndent()
 
-            "ocean" in p || "blue" in p || "nord" in p -> CustomThemeEntity(
-                id = id,
-                name = prompt.trim().take(24).ifBlank { "Nordic Slate" },
-                prompt = prompt,
-                boardBgArgb = 0xFF1B222C,
-                keyBgArgb = 0xFF27303F,
-                modifierBgArgb = 0xFF323D4F,
-                actionBgArgb = 0xFF5E81AC,
-                keyTextArgb = 0xFFECEFF4,
-                secondaryTextArgb = 0xFF9AA7B8,
-                accentArgb = 0xFF88C0D0,
-                borderArgb = 0xFF3B475C,
-                cornerRadiusDp = 10f,
-                isHardwareBevel = false,
-                typographyStyle = KeyTypographyStyle.HARDWARE_MONO.name,
-                isDark = true
+            val rawJson = callGeminiApi(
+                apiKey = apiKey,
+                prompt = systemPrompt,
+                jsonMode = true
             )
+            val cleaned = rawJson.trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
 
-            else -> CustomThemeEntity(
-                id = id,
-                name = prompt.trim().take(24).ifBlank { "Custom Studio" },
+            val parsed = json.decodeFromString<GeminiThemePayload>(cleaned)
+            val safeStyle = runCatching { KeyTypographyStyle.valueOf(parsed.typographyStyle) }
+                .getOrDefault(KeyTypographyStyle.DOT_MATRIX)
+
+            CustomThemeEntity(
+                id = "ai_${UUID.randomUUID().toString().take(8)}",
+                name = parsed.name.take(28).ifBlank { "Gemini Theme" },
                 prompt = prompt,
-                boardBgArgb = 0xFF121214,
-                keyBgArgb = 0xFF1E1E22,
-                modifierBgArgb = 0xFF2A2A30,
-                actionBgArgb = 0xFFE63946,
-                keyTextArgb = 0xFFF1FAEE,
-                secondaryTextArgb = 0xFFA8DADC,
-                accentArgb = 0xFFE63946,
-                borderArgb = 0xFF35353D,
-                cornerRadiusDp = 11f,
-                isHardwareBevel = false,
-                typographyStyle = KeyTypographyStyle.DOT_MATRIX.name,
-                isDark = true
+                boardBgArgb = parseHexColor(parsed.boardBg, 0xFF121214),
+                keyBgArgb = parseHexColor(parsed.keyBg, 0xFF1E1E22),
+                modifierBgArgb = parseHexColor(parsed.modifierBg, 0xFF2A2A30),
+                actionBgArgb = parseHexColor(parsed.actionBg, 0xFFD71921),
+                keyTextArgb = parseHexColor(parsed.keyText, 0xFFFFFFFF),
+                secondaryTextArgb = parseHexColor(parsed.secondaryText, 0xFF8E8E93),
+                accentArgb = parseHexColor(parsed.accent, 0xFFD71921),
+                borderArgb = parseHexColor(parsed.border, 0xFF33333A),
+                cornerRadiusDp = parsed.cornerRadiusDp.coerceIn(4f, 18f),
+                isHardwareBevel = parsed.isHardwareBevel,
+                typographyStyle = safeStyle.name,
+                isDark = parsed.isDark
             )
+        }
+    }
+
+    suspend fun translateWithGemini(
+        input: String,
+        apiKey: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return@withContext Result.success("")
+        if (apiKey.isBlank()) {
+            val quick = quickPhraseMap[trimmed.lowercase()]
+            return@withContext if (quick != null) {
+                Result.success(quick)
+            } else {
+                Result.failure(IllegalStateException("Add your Gemini API key in the Themes tab for live EN↔BN translation."))
+            }
+        }
+
+        runCatching {
+            val prompt = """
+                Translate the following text naturally between English and Bengali.
+                If the text is English (or Banglish), translate it to natural Bengali script.
+                If the text is Bengali script, translate it to natural English.
+                Return ONLY the translated text without quotes or explanations.
+                Text: $trimmed
+            """.trimIndent()
+            callGeminiApi(apiKey = apiKey, prompt = prompt, jsonMode = false).trim()
+        }
+    }
+
+    private fun callGeminiApi(apiKey: String, prompt: String, jsonMode: Boolean): String {
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        }
+
+        val bodyJson = buildJsonObject {
+            put("contents", buildJsonArray {
+                add(buildJsonObject {
+                    put("parts", buildJsonArray {
+                        add(buildJsonObject {
+                            put("text", prompt)
+                        })
+                    })
+                })
+            })
+            if (jsonMode) {
+                put("generationConfig", buildJsonObject {
+                    put("responseMimeType", "application/json")
+                })
+            }
+        }
+
+        conn.outputStream.use { os ->
+            os.write(json.encodeToString(JsonObject.serializer(), bodyJson).toByteArray(Charsets.UTF_8))
+        }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val responseText = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+        if (code !in 200..299) {
+            throw IllegalStateException("Gemini API error ($code): ${responseText.take(180)}")
+        }
+
+        val root = json.parseToJsonElement(responseText).jsonObject
+        val candidates = root["candidates"]?.jsonArray
+            ?: throw IllegalStateException("No candidates returned from Gemini")
+        val text = candidates[0].jsonObject["content"]?.jsonObject
+            ?.get("parts")?.jsonArray?.get(0)?.jsonObject
+            ?.get("text")?.jsonPrimitive?.content
+            ?: throw IllegalStateException("Empty Gemini response")
+        return text
+    }
+
+    private fun parseHexColor(hex: String, fallback: Long): Long {
+        val clean = hex.trim().removePrefix("#")
+        return when (clean.length) {
+            6 -> ("FF$clean").toLongOrNull(16) ?: fallback
+            8 -> clean.toLongOrNull(16) ?: fallback
+            else -> fallback
         }
     }
 
@@ -101,12 +206,4 @@ object AiRepository {
         "ধন্যবাদ" to "Thank you",
         "কেমন আছো" to "How are you?"
     )
-
-    fun translateQuick(input: String): String {
-        val trimmed = input.trim()
-        if (trimmed.isEmpty()) return ""
-        val hit = quickPhraseMap[trimmed.lowercase()]
-        if (hit != null) return hit
-        return "Add google-services.json to enable live Gemini EN↔BN translation for: \"$trimmed\""
-    }
 }

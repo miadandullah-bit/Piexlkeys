@@ -6,8 +6,13 @@ import kotlin.math.min
 
 data class SwipePoint(val x: Float, val y: Float)
 
+data class EnglishSuggestionResult(
+    val suggestions: List<String>,
+    val autoCorrection: String?
+)
+
 /**
- * Offline English prediction, proximity autocorrect, and swipe-path decoder.
+ * Offline English prediction, confidence-gated autocorrect, and swipe-path decoder.
  */
 object EnglishEngine {
 
@@ -32,8 +37,8 @@ object EnglishEngine {
         "than", "then", "now", "look", "only", "come", "its", "over", "think", "also",
         "back", "after", "use", "two", "how", "our", "work", "first", "well", "way",
         "even", "new", "want", "because", "any", "these", "give", "day", "most", "us",
-        "hello", "hey", "hi", "thanks", "thank", "please", "sorry", "yes", "no", "okay",
-        "ok", "great", "awesome", "nice", "cool", "love", "happy", "today", "tomorrow", "night",
+        "hello", "hey", "hi", "thanks", "thank", "please", "sorry", "yes", "okay", "ok",
+        "great", "awesome", "nice", "cool", "love", "happy", "today", "tomorrow", "night",
         "morning", "evening", "friend", "family", "home", "phone", "keyboard", "pixel", "keys", "android",
         "kotlin", "compose", "theme", "dark", "light", "minimal", "hardware", "typing", "swipe", "voice",
         "translate", "bangla", "english", "message", "send", "call", "later", "soon", "right", "left",
@@ -41,38 +46,81 @@ object EnglishEngine {
         "need", "help", "done", "ready", "start", "stop", "open", "close", "save", "delete",
         "copy", "paste", "clipboard", "emoji", "sound", "haptic", "fast", "clean", "design", "studio",
         "world", "life", "music", "photo", "video", "game", "play", "read", "write", "code",
-        "build", "test", "app", "screen", "button", "space", "cursor", "trackpad", "word", "text"
+        "build", "test", "app", "screen", "button", "space", "cursor", "trackpad", "word", "text",
+        "because", "between", "change", "check", "could", "doing", "every", "feel", "find", "going",
+        "group", "house", "important", "keep", "kind", "large", "last", "learn", "little", "long",
+        "made", "many", "mean", "might", "move", "name", "next", "number", "often", "part",
+        "place", "point", "problem", "put", "question", "quick", "run", "same", "school", "seem",
+        "should", "show", "small", "something", "still", "story", "study", "such", "system", "tell",
+        "things", "thought", "through", "together", "try", "turn", "under", "until", "using", "water",
+        "while", "without", "words", "years", "young"
     )
+
+    private val dictionarySet: HashSet<String> = baseDictionary.toHashSet()
 
     fun suggest(
         composing: String,
         userWords: List<String> = emptyList(),
         autocorrectEnabled: Boolean = true
-    ): List<String> {
-        if (composing.isBlank()) return emptyList()
-        val lower = composing.lowercase()
-        val allWords = (userWords + baseDictionary).distinct()
+    ): List<String> = suggestWithAutocorrect(composing, userWords, autocorrectEnabled).suggestions
 
-        // 1. Exact prefix matches
+    /**
+     * Returns up to 3 suggestions and an optional high-confidence autoCorrection.
+     * Banglish / unknown words that aren't very close to an English word will NOT be
+     * auto-corrected on Space; instead the exact typed word is preserved.
+     */
+    fun suggestWithAutocorrect(
+        composing: String,
+        userWords: List<String> = emptyList(),
+        autocorrectEnabled: Boolean = true
+    ): EnglishSuggestionResult {
+        if (composing.isBlank()) return EnglishSuggestionResult(emptyList(), null)
+        val lower = composing.lowercase()
+        val allWords = if (userWords.isEmpty()) baseDictionary else (userWords + baseDictionary).distinct()
+        val isExactKnown = lower in dictionarySet || userWords.any { it.equals(lower, ignoreCase = true) }
+
         val prefixMatches = allWords
+            .asSequence()
             .filter { it.startsWith(lower) }
             .sortedWith(compareBy<String> { it.length }.thenBy { it })
+            .take(3)
+            .toList()
 
-        if (prefixMatches.size >= 3 || !autocorrectEnabled) {
-            return prefixMatches.take(3)
+        if (isExactKnown) {
+            return EnglishSuggestionResult(
+                suggestions = prefixMatches.ifEmpty { listOf(composing) },
+                autoCorrection = null
+            )
         }
 
-        // 2. Fuzzy / edit-distance matches for typos
-        val fuzzyMatches = allWords
+        // Find close edit-distance candidates
+        val closeMatches = allWords
             .asSequence()
             .filter { abs(it.length - lower.length) <= 2 && it !in prefixMatches }
             .map { it to editDistance(lower, it) }
             .filter { it.second <= 2 }
-            .sortedBy { it.second }
-            .map { it.first }
+            .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
             .toList()
 
-        return (prefixMatches + fuzzyMatches).distinct().take(3)
+        val bestFuzzy = closeMatches.firstOrNull()
+        val shouldAutocorrect = autocorrectEnabled &&
+            prefixMatches.isEmpty() &&
+            bestFuzzy != null &&
+            (bestFuzzy.second == 1 ||
+                (bestFuzzy.second == 2 && lower.length >= 6 && bestFuzzy.first.firstOrNull() == lower.firstOrNull()))
+
+        val chipCandidates = buildList {
+            if (!shouldAutocorrect) {
+                add(composing)
+            }
+            addAll(prefixMatches)
+            addAll(closeMatches.map { it.first })
+        }.distinct().take(3)
+
+        return EnglishSuggestionResult(
+            suggestions = chipCandidates,
+            autoCorrection = if (shouldAutocorrect) bestFuzzy?.first else null
+        )
     }
 
     fun decodeSwipe(
@@ -86,21 +134,15 @@ object EnglishEngine {
         val startChars = nearestKeys(start, 2)
         val endChars = nearestKeys(end, 2)
 
-        val allWords = (userWords + baseDictionary).distinct()
-        val scored = allWords.asSequence()
+        val allWords = if (userWords.isEmpty()) baseDictionary else (userWords + baseDictionary).distinct()
+        return allWords.asSequence()
             .filter { it.length >= 2 }
-            .filter { word ->
-                word.first() in startChars && word.last() in endChars
-            }
-            .map { word ->
-                word to pathScore(word, points)
-            }
+            .filter { word -> word.first() in startChars && word.last() in endChars }
+            .map { word -> word to pathScore(word, points) }
             .sortedBy { it.second }
             .map { it.first }
             .take(3)
             .toList()
-
-        return scored
     }
 
     private fun nearestKeys(point: SwipePoint, count: Int): Set<Char> {

@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
@@ -183,7 +185,7 @@ fun EmojiKaomojiDrawer(
                 ) {
                     Text(
                         text = title,
-                        color = if (selected) theme.keyText else theme.secondaryText,
+                        color = if (selected) Color.White else theme.secondaryText,
                         fontSize = 12.sp,
                         fontFamily = theme.keyFontFamily()
                     )
@@ -359,10 +361,10 @@ fun ResizeDrawer(
             .fillMaxWidth()
             .background(theme.boardBackground)
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "HEIGHT SCALE: ${(prefs.heightScale * 100).toInt()}%",
+            text = "KEY HEIGHT: ${(prefs.heightScale * 100).toInt()}%",
             color = theme.keyText,
             fontSize = 12.sp,
             fontFamily = theme.keyFontFamily()
@@ -370,7 +372,19 @@ fun ResizeDrawer(
         Slider(
             value = prefs.heightScale,
             onValueChange = { scope.launch { prefsRepo.setHeightScale(it) } },
-            valueRange = 0.8f..1.35f,
+            valueRange = 0.85f..1.45f,
+            colors = SliderDefaults.colors(thumbColor = theme.accentColor, activeTrackColor = theme.accentColor)
+        )
+        Text(
+            text = "KEY LABEL SIZE: ${prefs.keyFontSizeSp.toInt()}sp",
+            color = theme.keyText,
+            fontSize = 12.sp,
+            fontFamily = theme.keyFontFamily()
+        )
+        Slider(
+            value = prefs.keyFontSizeSp,
+            onValueChange = { scope.launch { prefsRepo.setKeyFontSizeSp(it) } },
+            valueRange = 15f..24f,
             colors = SliderDefaults.colors(thumbColor = theme.accentColor, activeTrackColor = theme.accentColor)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -387,7 +401,7 @@ fun ResizeDrawer(
                 ) {
                     Text(
                         text = mode.name,
-                        color = theme.keyText,
+                        color = if (selected) Color.White else theme.keyText,
                         fontSize = 11.sp,
                         fontFamily = theme.keyFontFamily()
                     )
@@ -443,10 +457,14 @@ fun VoiceDrawer(
 @Composable
 fun TranslateDrawer(
     theme: KeyboardThemeSpec,
+    prefs: KeyboardPreferences,
     onInsert: (String) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
     var output by remember { mutableStateOf("") }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -456,7 +474,7 @@ fun TranslateDrawer(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "EN ↔ BN SMART TRANSLATOR",
+            text = "GEMINI EN ↔ BN TRANSLATOR",
             color = theme.secondaryText,
             fontSize = 11.sp,
             fontFamily = theme.keyFontFamily()
@@ -474,17 +492,35 @@ fun TranslateDrawer(
                     .border(1.dp, theme.borderColor, RoundedCornerShape(8.dp))
                     .padding(10.dp),
                 decorationBox = { inner ->
-                    if (input.isEmpty()) Text("Type phrase (e.g. hello, thank you)...", color = theme.secondaryText, fontSize = 13.sp)
+                    if (input.isEmpty()) Text("Type English, Banglish, or বাংলা...", color = theme.secondaryText, fontSize = 13.sp)
                     inner()
                 }
             )
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { output = AiRepository.translateQuick(input) },
+                onClick = {
+                    if (input.isNotBlank() && !loading) {
+                        loading = true
+                        errorMsg = null
+                        scope.launch {
+                            AiRepository.translateWithGemini(input, prefs.geminiApiKey)
+                                .onSuccess { output = it }
+                                .onFailure { errorMsg = it.message }
+                            loading = false
+                        }
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = theme.actionSurface)
             ) {
-                Text("Go", fontWeight = FontWeight.Bold)
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                } else {
+                    Text("Go", fontWeight = FontWeight.Bold)
+                }
             }
+        }
+        if (errorMsg != null) {
+            Text(errorMsg!!, color = theme.accentColor, fontSize = 12.sp)
         }
         if (output.isNotEmpty()) {
             Row(

@@ -21,6 +21,7 @@ data class KeyboardUiState(
     val activeDrawer: UtilityDrawer = UtilityDrawer.NONE,
     val composingWord: String = "",
     val suggestions: List<String> = emptyList(),
+    val pendingAutoCorrection: String? = null,
     val isTrackpadMode: Boolean = false,
     val swipePoints: List<SwipePoint> = emptyList(),
     val userWords: List<String> = emptyList()
@@ -69,6 +70,25 @@ class KeyboardController(
         }
     }
 
+    fun onSecondaryCharTap(secondaryChar: String) {
+        hapticController.performKeyPress(
+            durationMs = (currentPrefs.hapticStrengthMs + 6).coerceAtMost(50),
+            style = currentPrefs.hapticStyle,
+            soundEnabled = currentPrefs.soundEnabled
+        )
+        commitPendingComposing()
+        target.commitText(secondaryChar)
+    }
+
+    fun onBackspaceRepeatTick() {
+        hapticController.performKeyPress(
+            durationMs = (currentPrefs.hapticStrengthMs / 2).coerceAtLeast(6),
+            style = currentPrefs.hapticStyle,
+            soundEnabled = false
+        )
+        handleBackspace()
+    }
+
     private fun handleCharInput(charText: String) {
         val lang = currentPrefs.activeLanguage
         if (_uiState.value.layer == KeyboardLayer.ALPHA &&
@@ -83,11 +103,12 @@ class KeyboardController(
                 newComposing
             }
             target.setComposingText(displayComposing)
-            val newSuggestions = computeSuggestions(newComposing, lang)
+            val (newSuggestions, autoCorrection) = computeSuggestions(newComposing, lang)
             _uiState.update {
                 it.copy(
                     composingWord = newComposing,
                     suggestions = newSuggestions,
+                    pendingAutoCorrection = autoCorrection,
                     shiftState = if (it.shiftState == ShiftState.ONCE) ShiftState.OFF else it.shiftState
                 )
             }
@@ -118,7 +139,9 @@ class KeyboardController(
             if (trimmed.isEmpty()) {
                 target.setComposingText("")
                 target.finishComposingText()
-                _uiState.update { it.copy(composingWord = "", suggestions = emptyList()) }
+                _uiState.update {
+                    it.copy(composingWord = "", suggestions = emptyList(), pendingAutoCorrection = null)
+                }
             } else {
                 val lang = currentPrefs.activeLanguage
                 val display = if (lang == InputLanguage.AVRO_BN) {
@@ -127,10 +150,12 @@ class KeyboardController(
                     trimmed
                 }
                 target.setComposingText(display)
+                val (newSuggestions, autoCorrection) = computeSuggestions(trimmed, lang)
                 _uiState.update {
                     it.copy(
                         composingWord = trimmed,
-                        suggestions = computeSuggestions(trimmed, lang)
+                        suggestions = newSuggestions,
+                        pendingAutoCorrection = autoCorrection
                     )
                 }
             }
@@ -162,16 +187,19 @@ class KeyboardController(
         val state = _uiState.value
         val composing = state.composingWord
         if (composing.isNotEmpty()) {
-            val best = state.suggestions.firstOrNull()
-            val toCommit = if (currentPrefs.activeLanguage == InputLanguage.AVRO_BN) {
-                best ?: AvroPhoneticEngine.transliterate(composing)
-            } else if (currentPrefs.autocorrectEnabled && best != null) {
-                best
-            } else {
-                composing
+            val toCommit = when (currentPrefs.activeLanguage) {
+                InputLanguage.AVRO_BN -> state.suggestions.firstOrNull() ?: AvroPhoneticEngine.transliterate(composing)
+                InputLanguage.EN_US -> if (currentPrefs.autocorrectEnabled) {
+                    state.pendingAutoCorrection ?: composing
+                } else {
+                    composing
+                }
+                InputLanguage.BENGALI_NATIVE -> composing
             }
             target.commitText("$toCommit ")
-            _uiState.update { it.copy(composingWord = "", suggestions = emptyList()) }
+            _uiState.update {
+                it.copy(composingWord = "", suggestions = emptyList(), pendingAutoCorrection = null)
+            }
         } else {
             target.commitText(" ")
         }
@@ -189,7 +217,9 @@ class KeyboardController(
             soundEnabled = currentPrefs.soundEnabled
         )
         target.commitText("$word ")
-        _uiState.update { it.copy(composingWord = "", suggestions = emptyList()) }
+        _uiState.update {
+            it.copy(composingWord = "", suggestions = emptyList(), pendingAutoCorrection = null)
+        }
     }
 
     fun commitTextDirectly(text: String) {
@@ -206,7 +236,9 @@ class KeyboardController(
                 composing
             }
             target.commitText(text)
-            _uiState.update { it.copy(composingWord = "", suggestions = emptyList()) }
+            _uiState.update {
+                it.copy(composingWord = "", suggestions = emptyList(), pendingAutoCorrection = null)
+            }
         }
     }
 
@@ -252,7 +284,9 @@ class KeyboardController(
         val decoded = EnglishEngine.decodeSwipe(points, _uiState.value.userWords)
         val best = decoded.firstOrNull() ?: return
         target.commitText("$best ")
-        _uiState.update { it.copy(composingWord = "", suggestions = decoded) }
+        _uiState.update {
+            it.copy(composingWord = "", suggestions = decoded, pendingAutoCorrection = null)
+        }
     }
 
     // Utility Drawers
@@ -270,15 +304,18 @@ class KeyboardController(
         }
     }
 
-    private fun computeSuggestions(composing: String, lang: InputLanguage): List<String> {
+    private fun computeSuggestions(composing: String, lang: InputLanguage): Pair<List<String>, String?> {
         return when (lang) {
-            InputLanguage.EN_US -> EnglishEngine.suggest(
-                composing = composing,
-                userWords = _uiState.value.userWords,
-                autocorrectEnabled = currentPrefs.autocorrectEnabled
-            )
-            InputLanguage.AVRO_BN -> AvroPhoneticEngine.getCandidates(composing)
-            InputLanguage.BENGALI_NATIVE -> emptyList()
+            InputLanguage.EN_US -> {
+                val res = EnglishEngine.suggestWithAutocorrect(
+                    composing = composing,
+                    userWords = _uiState.value.userWords,
+                    autocorrectEnabled = currentPrefs.autocorrectEnabled
+                )
+                res.suggestions to res.autoCorrection
+            }
+            InputLanguage.AVRO_BN -> AvroPhoneticEngine.getCandidates(composing) to null
+            InputLanguage.BENGALI_NATIVE -> emptyList<String>() to null
         }
     }
 }

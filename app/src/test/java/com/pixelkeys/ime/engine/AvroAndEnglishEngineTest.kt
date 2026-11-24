@@ -1,6 +1,7 @@
 package com.pixelkeys.ime.engine
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,17 +21,17 @@ class AvroAndEnglishEngineTest {
     }
 
     @Test
-    fun englishSuggestFindsPrefixAndFuzzyMatches() {
-        val prefix = EnglishEngine.suggest("pix")
-        assertTrue(prefix.contains("pixel"))
+    fun englishAutocorrectsCloseTypoButPreservesBanglish() {
+        val close = EnglishEngine.suggestWithAutocorrect("helo", autocorrectEnabled = true)
+        assertEquals("hello", close.autoCorrection)
 
-        val fuzzy = EnglishEngine.suggest("helo", autocorrectEnabled = true)
-        assertTrue(fuzzy.contains("hello"))
+        val banglish = EnglishEngine.suggestWithAutocorrect("valobashi", autocorrectEnabled = true)
+        assertNull(banglish.autoCorrection)
+        assertTrue(banglish.suggestions.contains("valobashi"))
     }
 
     @Test
     fun swipeDecoderFindsExpectedWord() {
-        // Approximate path from 'h' -> 'i'
         val points = listOf(
             SwipePoint(0.55f, 0.35f),
             SwipePoint(0.65f, 0.2f),

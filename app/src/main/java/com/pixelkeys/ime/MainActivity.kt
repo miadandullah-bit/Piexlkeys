@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -173,7 +174,7 @@ private fun PlaygroundTab(
     }
 
     var showSetupBanner by remember { mutableStateOf(true) }
-    val imeEnabled = remember(selectedCheckTick()) { isImeEnabled(context) }
+    val imeEnabled = remember { isImeEnabled(context) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -219,7 +220,6 @@ private fun PlaygroundTab(
                 )
             }
 
-            // Interactive Playground Input Box
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -238,7 +238,7 @@ private fun PlaygroundTab(
                     decorationBox = { inner ->
                         if (textState.value.text.isEmpty()) {
                             Text(
-                                text = "Tap below to test EN, AVRO (e.g. 'ami banglay gan gai'), বাংলা, swipe typing & long-press spacebar trackpad...",
+                                text = "Tap below to test EN, AVRO (e.g. 'ami banglay gan gai'), বাংলা, long-press keys for symbols, hold Backspace to delete, or hold Spacebar for cursor trackpad...",
                                 color = Color(0xFF7C7C85),
                                 fontSize = 14.sp
                             )
@@ -249,7 +249,6 @@ private fun PlaygroundTab(
             }
         }
 
-        // Docked Live Keyboard
         PixelKeysBoard(
             controller = controller,
             prefs = prefs,
@@ -312,7 +311,12 @@ private fun ThemesTab(
     onSelectTheme: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    var apiKeyDraft by remember(prefs.geminiApiKey) { mutableStateOf(prefs.geminiApiKey) }
     var aiPrompt by remember { mutableStateOf("") }
+    var isGenerating by remember { mutableStateOf(false) }
+    var aiError by remember { mutableStateOf<String?>(null) }
+    var apiKeySavedMsg by remember { mutableStateOf(false) }
+
     val allPresets = BuiltInThemes.allBuiltIns + dynamicYou
 
     LazyColumn(
@@ -321,13 +325,53 @@ private fun ThemesTab(
     ) {
         item {
             Text(
-                text = "AI THEME STUDIO",
+                text = "GEMINI AI THEME STUDIO",
                 color = Color.White,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
             Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Gemini API Key (free at aistudio.google.com/apikey)",
+                color = Color(0xFF9E9EA7),
+                fontSize = 11.sp
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicTextField(
+                    value = apiKeyDraft,
+                    onValueChange = {
+                        apiKeyDraft = it
+                        apiKeySavedMsg = false
+                    },
+                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+                    cursorBrush = SolidColor(Color(0xFFD71921)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF1A1A1F))
+                        .border(1.dp, Color(0xFF33333C), RoundedCornerShape(10.dp))
+                        .padding(10.dp),
+                    decorationBox = { inner ->
+                        if (apiKeyDraft.isEmpty()) Text("Paste AIza... key here", color = Color.Gray, fontSize = 12.sp)
+                        inner()
+                    }
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            app.preferencesRepository.setGeminiApiKey(apiKeyDraft)
+                            apiKeySavedMsg = true
+                        }
+                    }
+                ) {
+                    Text(if (apiKeySavedMsg) "Saved" else "Save Key", color = Color.White, fontSize = 12.sp)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BasicTextField(
                     value = aiPrompt,
@@ -341,26 +385,46 @@ private fun ThemesTab(
                         .border(1.dp, Color(0xFF33333C), RoundedCornerShape(10.dp))
                         .padding(12.dp),
                     decorationBox = { inner ->
-                        if (aiPrompt.isEmpty()) Text("e.g. Warm matcha paper keycaps...", color = Color.Gray, fontSize = 13.sp)
+                        if (aiPrompt.isEmpty()) Text("Describe a theme (e.g. Cyberpunk Tokyo neon amber)...", color = Color.Gray, fontSize = 13.sp)
                         inner()
                     }
                 )
                 Spacer(Modifier.width(8.dp))
                 Button(
                     onClick = {
-                        if (aiPrompt.isNotBlank()) {
-                            val generated = AiRepository.generateThemeFromPrompt(aiPrompt)
+                        if (aiPrompt.isNotBlank() && !isGenerating) {
+                            isGenerating = true
+                            aiError = null
                             scope.launch {
-                                app.database.customThemeDao().upsert(generated)
-                                app.preferencesRepository.setThemeId(generated.id)
+                                val effectiveKey = apiKeyDraft.trim().ifEmpty { prefs.geminiApiKey }
+                                if (effectiveKey.isNotEmpty() && effectiveKey != prefs.geminiApiKey) {
+                                    app.preferencesRepository.setGeminiApiKey(effectiveKey)
+                                }
+                                AiRepository.generateThemeWithGemini(aiPrompt, effectiveKey)
+                                    .onSuccess { generated ->
+                                        app.database.customThemeDao().upsert(generated)
+                                        app.preferencesRepository.setThemeId(generated.id)
+                                        aiPrompt = ""
+                                    }
+                                    .onFailure { err ->
+                                        aiError = err.message
+                                    }
+                                isGenerating = false
                             }
-                            aiPrompt = ""
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD71921))
                 ) {
-                    Text("Generate")
+                    if (isGenerating) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                    } else {
+                        Text("Generate")
+                    }
                 }
+            }
+            if (aiError != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(aiError!!, color = Color(0xFFFF6B6B), fontSize = 12.sp)
             }
         }
 
@@ -375,7 +439,7 @@ private fun ThemesTab(
         if (customThemes.isNotEmpty()) {
             item {
                 Text(
-                    text = "GENERATED THEMES",
+                    text = "GEMINI GENERATED THEMES",
                     color = Color(0xFF8E8E93),
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
@@ -452,6 +516,24 @@ private fun HapticsAndLayoutTab(
         }
 
         item {
+            Text("Key Height Scale: ${(prefs.heightScale * 100).toInt()}%", color = Color.White)
+            Slider(
+                value = prefs.heightScale,
+                onValueChange = { scope.launch { repo.setHeightScale(it) } },
+                valueRange = 0.85f..1.45f
+            )
+        }
+
+        item {
+            Text("Key Label Size: ${prefs.keyFontSizeSp.toInt()}sp", color = Color.White)
+            Slider(
+                value = prefs.keyFontSizeSp,
+                onValueChange = { scope.launch { repo.setKeyFontSizeSp(it) } },
+                valueRange = 15f..24f
+            )
+        }
+
+        item {
             Text("Vibration Duration: ${prefs.hapticStrengthMs} ms", color = Color.White)
             Slider(
                 value = prefs.hapticStrengthMs.toFloat(),
@@ -506,11 +588,8 @@ private fun HapticsAndLayoutTab(
             SettingToggleRow("Show Number Row", prefs.showNumberRow) {
                 scope.launch { repo.setShowNumberRow(it) }
             }
-            SettingToggleRow("Autocorrect", prefs.autocorrectEnabled) {
+            SettingToggleRow("Autocorrect (Close English Words Only)", prefs.autocorrectEnabled) {
                 scope.launch { repo.setAutocorrectEnabled(it) }
-            }
-            SettingToggleRow("Swipe Typing", prefs.swipeTypingEnabled) {
-                scope.launch { repo.setSwipeTypingEnabled(it) }
             }
             SettingToggleRow("Key Click Sound", prefs.soundEnabled) {
                 scope.launch { repo.setSoundEnabled(it) }
@@ -551,8 +630,6 @@ private fun SettingToggleRow(label: String, checked: Boolean, onToggle: (Boolean
         Switch(checked = checked, onCheckedChange = onToggle)
     }
 }
-
-private fun selectedCheckTick(): Int = 0
 
 private fun isImeEnabled(context: Context): Boolean {
     val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return false

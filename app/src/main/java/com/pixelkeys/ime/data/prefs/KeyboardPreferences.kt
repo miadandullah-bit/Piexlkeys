@@ -36,13 +36,15 @@ data class KeyboardPreferences(
     val activeThemeId: String = "nothing_dark",
     val activeLanguage: InputLanguage = InputLanguage.EN_US,
     val heightScale: Float = 1.0f,
+    val keyFontSizeSp: Float = 19f,
     val oneHandedMode: OneHandedMode = OneHandedMode.NONE,
     val showNumberRow: Boolean = false,
     val hapticStrengthMs: Int = 18,
     val hapticStyle: HapticStyle = HapticStyle.CRISP,
     val soundEnabled: Boolean = false,
     val autocorrectEnabled: Boolean = true,
-    val swipeTypingEnabled: Boolean = true
+    val swipeTypingEnabled: Boolean = true,
+    val geminiApiKey: String = ""
 )
 
 class PreferencesRepository(private val context: Context) {
@@ -50,6 +52,7 @@ class PreferencesRepository(private val context: Context) {
         val THEME_ID = stringPreferencesKey("active_theme_id")
         val LANGUAGE = stringPreferencesKey("active_language")
         val HEIGHT_SCALE = floatPreferencesKey("height_scale")
+        val KEY_FONT_SIZE = floatPreferencesKey("key_font_size_sp")
         val ONE_HANDED = stringPreferencesKey("one_handed_mode")
         val SHOW_NUMBER_ROW = booleanPreferencesKey("show_number_row")
         val HAPTIC_MS = intPreferencesKey("haptic_strength_ms")
@@ -57,6 +60,7 @@ class PreferencesRepository(private val context: Context) {
         val SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
         val AUTOCORRECT = booleanPreferencesKey("autocorrect_enabled")
         val SWIPE_TYPING = booleanPreferencesKey("swipe_typing_enabled")
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
     }
 
     val preferencesFlow: Flow<KeyboardPreferences> = context.dataStore.data.map { prefs ->
@@ -65,7 +69,8 @@ class PreferencesRepository(private val context: Context) {
             activeLanguage = runCatching {
                 InputLanguage.valueOf(prefs[Keys.LANGUAGE] ?: InputLanguage.EN_US.name)
             }.getOrDefault(InputLanguage.EN_US),
-            heightScale = (prefs[Keys.HEIGHT_SCALE] ?: 1.0f).coerceIn(0.8f, 1.35f),
+            heightScale = (prefs[Keys.HEIGHT_SCALE] ?: 1.0f).coerceIn(0.85f, 1.45f),
+            keyFontSizeSp = (prefs[Keys.KEY_FONT_SIZE] ?: 19f).coerceIn(15f, 24f),
             oneHandedMode = runCatching {
                 OneHandedMode.valueOf(prefs[Keys.ONE_HANDED] ?: OneHandedMode.NONE.name)
             }.getOrDefault(OneHandedMode.NONE),
@@ -76,7 +81,8 @@ class PreferencesRepository(private val context: Context) {
             }.getOrDefault(HapticStyle.CRISP),
             soundEnabled = prefs[Keys.SOUND_ENABLED] ?: false,
             autocorrectEnabled = prefs[Keys.AUTOCORRECT] ?: true,
-            swipeTypingEnabled = prefs[Keys.SWIPE_TYPING] ?: true
+            swipeTypingEnabled = prefs[Keys.SWIPE_TYPING] ?: true,
+            geminiApiKey = prefs[Keys.GEMINI_API_KEY] ?: ""
         )
     }
 
@@ -96,7 +102,11 @@ class PreferencesRepository(private val context: Context) {
     }
 
     suspend fun setHeightScale(scale: Float) {
-        context.dataStore.edit { it[Keys.HEIGHT_SCALE] = scale.coerceIn(0.8f, 1.35f) }
+        context.dataStore.edit { it[Keys.HEIGHT_SCALE] = scale.coerceIn(0.85f, 1.45f) }
+    }
+
+    suspend fun setKeyFontSizeSp(sizeSp: Float) {
+        context.dataStore.edit { it[Keys.KEY_FONT_SIZE] = sizeSp.coerceIn(15f, 24f) }
     }
 
     suspend fun setOneHandedMode(mode: OneHandedMode) {
@@ -125,5 +135,9 @@ class PreferencesRepository(private val context: Context) {
 
     suspend fun setSwipeTypingEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.SWIPE_TYPING] = enabled }
+    }
+
+    suspend fun setGeminiApiKey(apiKey: String) {
+        context.dataStore.edit { it[Keys.GEMINI_API_KEY] = apiKey.trim() }
     }
 }
