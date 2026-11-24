@@ -3,9 +3,13 @@ name: Android CI
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -32,8 +36,20 @@ jobs:
       - name: Run Unit Tests
         run: gradle testDebugUnitTest --stacktrace
 
+      - name: Rename APK for Release
+        run: |
+          VERSION_TAG="${GITHUB_REF_NAME:-dev}"
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Pixelkeys-${VERSION_TAG}.apk"
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: PixelKeys-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: Pixelkeys-apk
+          path: app/build/outputs/apk/debug/Pixelkeys-*.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/Pixelkeys-*.apk
+          generate_release_notes: true
