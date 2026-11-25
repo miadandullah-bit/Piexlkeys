@@ -35,8 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.setValueimport androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -93,6 +92,10 @@ fun PixelKeysBoard(
     val suggestions by remember(controller) {
         controller.uiState.map { it.suggestions }.distinctUntilChanged()
     }.collectAsState(initial = emptyList())
+
+    val aiRefineState by remember(controller) {
+        controller.uiState.map { it.aiRefine }.distinctUntilChanged()
+    }.collectAsState(initial = AiRefineState())
 
     val activeDrawer by remember(controller) {
         controller.uiState.map { it.activeDrawer }.distinctUntilChanged()
@@ -169,6 +172,11 @@ fun PixelKeysBoard(
                     UtilityDrawer.TRANSLATE -> TranslateDrawer(theme, prefs) {
                         controller.commitTextDirectly(it)
                     }
+                    UtilityDrawer.AI_REFINE -> AiRefineDrawer(
+                        theme = theme,
+                        prefs = prefs,
+                        controller = controller
+                    )
                 }
             }
 

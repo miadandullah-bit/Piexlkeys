@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Numbers
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Translate
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -74,6 +75,7 @@ import com.pixelkeys.ime.engine.VoiceTypingController
 import com.pixelkeys.ime.theme.KeyboardThemeSpec
 import com.pixelkeys.ime.theme.contrastTextOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 
 @Composable
 fun UtilityStripDrawer(
@@ -105,6 +107,9 @@ fun UtilityStripDrawer(
         }
         UtilityActionChip(Icons.Outlined.Translate, "Translate", theme) {
             controller.openDrawer(UtilityDrawer.TRANSLATE)
+        }
+        UtilityActionChip(Icons.Outlined.AutoFixHigh, "AI Refine", theme) {
+            controller.openDrawer(UtilityDrawer.AI_REFINE)
         }
         UtilityActionChip(
             icon = Icons.Outlined.Numbers,
@@ -630,6 +635,199 @@ fun TranslateDrawer(
             ) {
                 Text(output, color = theme.keyText, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text("INSERT", color = theme.accentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// ─── MODULE 4: AI Text Tone Refiner Drawer ────────────────────────────────────
+
+/**
+ * Full-featured AI Tone Refiner & Translator drawer.
+ *
+ * Provides tone chips: Translate, Fix Grammar, Formal, Casual, Polite, Clean Bangla.
+ * - Reads text before cursor from the InputConnection via [controller.getTextBeforeCursor]
+ *   (or the user may type/paste text manually in the input box).
+ * - Shows an inline preview of the AI result.
+ * - "Replace" commits via InputConnection; "Discard" closes the preview.
+ * - Displays a loading spinner and error messages from the AI call.
+ */
+@Composable
+fun AiRefineDrawer(
+    theme: KeyboardThemeSpec,
+    prefs: KeyboardPreferences,
+    controller: KeyboardController
+) {
+    val scope = rememberCoroutineScope()
+    val aiState by controller.uiState
+        .map { it.aiRefine }
+        .collectAsState(initial = AiRefineState())
+
+    var inputText by remember { mutableStateOf("") }
+    var originalLength by remember { mutableIntStateOf(0) }
+
+    val toneChips = remember {
+        listOf(
+            AiRepository.ToneMode.TRANSLATE     to "🌐 Translate",
+            AiRepository.ToneMode.FIX_GRAMMAR   to "✏️ Fix Grammar",
+            AiRepository.ToneMode.FORMAL        to "👔 Formal",
+            AiRepository.ToneMode.CASUAL        to "😊 Casual",
+            AiRepository.ToneMode.POLITE        to "🙏 Polite",
+            AiRepository.ToneMode.CLEAN_BANGLA  to "বাং Clean Bangla"
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.boardBackground)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Header
+        Text(
+            text = "${prefs.aiProvider.displayName.uppercase()} · AI TEXT REFINER",
+            color = theme.secondaryText,
+            fontSize = 11.sp,
+            fontFamily = theme.keyFontFamily()
+        )
+
+        // Input field
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BasicTextField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                textStyle = TextStyle(color = theme.keyText, fontSize = 13.sp),
+                cursorBrush = SolidColor(theme.accentColor),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(theme.keySurface)
+                    .border(1.dp, theme.borderColor, RoundedCornerShape(8.dp))
+                    .padding(9.dp),
+                decorationBox = { inner ->
+                    if (inputText.isEmpty()) Text(
+                        "Type, paste, or the AI will read text before cursor…",
+                        color = theme.secondaryText, fontSize = 12.sp
+                    )
+                    inner()
+                },
+                maxLines = 3
+            )
+        }
+
+        // Tone chips (horizontal scroll)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            toneChips.forEach { (mode, label) ->
+                val isLoading = aiState.isLoading
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(theme.modifierSurface)
+                        .border(1.dp, theme.accentColor.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                        .clickable(enabled = !isLoading) {
+                            val text = inputText.trim()
+                            originalLength = text.length
+                            controller.requestAiRefine(text, mode)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = label,
+                        color = if (isLoading) theme.secondaryText else theme.keyText,
+                        fontSize = 11.sp,
+                        fontFamily = theme.keyFontFamily()
+                    )
+                }
+            }
+        }
+
+        // Loading
+        if (aiState.isLoading) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = theme.accentColor
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("Processing…", color = theme.secondaryText, fontSize = 12.sp)
+            }
+        }
+
+        // Error
+        aiState.errorMessage?.let { err ->
+            Text(
+                text = "⚠ $err",
+                color = theme.accentColor,
+                fontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // AI Preview + Replace / Discard
+        aiState.previewText?.let { preview ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(theme.modifierSurface)
+                    .border(1.dp, theme.accentColor, RoundedCornerShape(8.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(preview, color = theme.keyText, fontSize = 13.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Replace button
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.actionSurface)
+                            .clickable {
+                                controller.commitAiRefineResult(originalLength)
+                                inputText = ""
+                            }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "✓ Replace",
+                            color = androidx.compose.ui.graphics.Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    // Discard button
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(theme.modifierSurface)
+                            .border(1.dp, theme.borderColor, RoundedCornerShape(8.dp))
+                            .clickable { controller.discardAiRefineResult() }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "✗ Discard",
+                            color = theme.secondaryText,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
             }
         }
     }

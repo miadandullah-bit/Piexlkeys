@@ -1,9 +1,11 @@
 package com.pixelkeys.ime.keyboard
 
+import com.pixelkeys.ime.ai.AiRepository
 import com.pixelkeys.ime.data.prefs.InputLanguage
 import com.pixelkeys.ime.data.prefs.KeyboardPreferences
 import com.pixelkeys.ime.data.prefs.PreferencesRepository
 import com.pixelkeys.ime.engine.AvroPhoneticEngine
+import com.pixelkeys.ime.engine.BanglaFuzzyDictionary
 import com.pixelkeys.ime.engine.EnglishEngine
 import com.pixelkeys.ime.engine.SwipePoint
 import com.pixelkeys.ime.haptics.HapticController
@@ -15,6 +17,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+data class AiRefineState(
+    val isLoading: Boolean = false,
+    val previewText: String? = null,
+    val errorMessage: String? = null
+)
+
 data class KeyboardUiState(
     val layer: KeyboardLayer = KeyboardLayer.ALPHA,
     val shiftState: ShiftState = ShiftState.OFF,
@@ -24,7 +32,8 @@ data class KeyboardUiState(
     val pendingAutoCorrection: String? = null,
     val isTrackpadMode: Boolean = false,
     val swipePoints: List<SwipePoint> = emptyList(),
-    val userWords: List<String> = emptyList()
+    val userWords: List<String> = emptyList(),
+    val aiRefine: AiRefineState = AiRefineState()
 )
 
 class KeyboardController(
@@ -33,6 +42,8 @@ class KeyboardController(
     private val hapticController: HapticController,
     private var target: TextTargetAdapter
 ) {
+    // Lazily initialize the Bangla fuzzy dictionary off the main thread
+    private val fuzzyDict by lazy { BanglaFuzzyDictionary.getInstance() }
     private val _uiState = MutableStateFlow(KeyboardUiState())
     val uiState: StateFlow<KeyboardUiState> = _uiState.asStateFlow()
 
@@ -258,6 +269,52 @@ class KeyboardController(
         }
     }
 
+    // ── AI Refine & Translate (Module 4) ──────────────────────────────────────
+
+    /**
+     * Initiates an AI refinement/translation of the given [text].
+     * Result is stored in [KeyboardUiState.aiRefine] for the UI to display
+     * in the inline preview bar. Call [commitAiRefineResult] or [discardAiRefineResult]
+     * to act on it.
+     */
+    fun requestAiRefine(text: String, mode: AiRepository.ToneMode) {
+        if (text.isBlank()) return
+        _uiState.update { it.copy(aiRefine = AiRefineState(isLoading = true)) }
+        scope.launch {
+            val result = AiRepository.refineText(
+                text = text,
+                mode = mode,
+                prefs = currentPrefs
+            )
+            _uiState.update { state ->
+                state.copy(
+                    aiRefine = AiRefineState(
+                        isLoading = false,
+                        previewText = result.getOrNull(),
+                        errorMessage = result.exceptionOrNull()?.message
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Replaces the original text (of [originalLength] characters) with the
+     * AI preview. Commits via InputConnection and closes the preview.
+     */
+    fun commitAiRefineResult(originalLength: Int) {
+        val preview = _uiState.value.aiRefine.previewText ?: return
+        commitPendingComposing()
+        if (originalLength > 0) repeat(originalLength) { target.deleteBackward(1) }
+        target.commitText(preview)
+        _uiState.update { it.copy(aiRefine = AiRefineState()) }
+    }
+
+    /** Dismisses the AI preview bar without modifying the text. */
+    fun discardAiRefineResult() {
+        _uiState.update { it.copy(aiRefine = AiRefineState()) }
+    }
+
     // Spacebar Cursor Trackpad
     fun onTrackpadStart() {
         commitPendingComposing()
@@ -330,7 +387,15 @@ class KeyboardController(
                 )
                 res.suggestions to res.autoCorrection
             }
-            InputLanguage.AVRO_BN -> AvroPhoneticEngine.getCandidates(composing) to null
+            InputLanguage.AVRO_BN -> {
+                // Merge: Avro engine candidates + fuzzy dictionary lookup
+                val avroCandidates = AvroPhoneticEngine.getCandidates(composing)
+                val fuzzyCandidates = fuzzyDict.lookup(composing, maxResults = 5)
+                val merged = LinkedHashSet<String>()
+                merged.addAll(avroCandidates)
+                merged.addAll(fuzzyCandidates)
+                merged.take(5).toList() to null
+            }
             InputLanguage.BENGALI_NATIVE -> emptyList<String>() to null
         }
     }

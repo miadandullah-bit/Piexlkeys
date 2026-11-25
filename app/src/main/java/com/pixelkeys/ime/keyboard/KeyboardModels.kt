@@ -21,7 +21,8 @@ enum class UtilityDrawer {
     CLIPBOARD,
     RESIZE,
     VOICE,
-    TRANSLATE
+    TRANSLATE,
+    AI_REFINE    // Module 4: AI Text Tone Refiner
 }
 
 enum class KeyType {
