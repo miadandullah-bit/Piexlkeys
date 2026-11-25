@@ -65,6 +65,32 @@ object AiRepository {
     private const val READ_TIMEOUT_MS    = 30_000
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Connection test
+    // ─────────────────────────────────────────────────────────────────────────
+
+    suspend fun testConnection(prefs: KeyboardPreferences): Result<String> = withContext(Dispatchers.IO) {
+        val provider = prefs.aiProvider
+        val apiKey = prefs.apiKeyFor(provider).trim()
+        val model = prefs.modelFor(provider)
+        if (apiKey.isBlank() && provider != AiProvider.CUSTOM) {
+            return@withContext Result.failure(
+                IllegalStateException("Enter your ${provider.displayName} API key first.")
+            )
+        }
+        runCatching {
+            val reply = callProvider(
+                provider = provider,
+                baseUrl = prefs.baseUrlFor(provider),
+                model = model,
+                apiKey = apiKey,
+                prompt = "Reply with only the word OK.",
+                jsonMode = false
+            ).trim()
+            "Connected to ${provider.displayName} ($model): ${reply.take(32)}"
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // MODULE 3: AI Keyboard Theme Generator
     // ─────────────────────────────────────────────────────────────────────────
 
