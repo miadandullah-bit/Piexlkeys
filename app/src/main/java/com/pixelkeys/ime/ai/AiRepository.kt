@@ -1,6 +1,8 @@
 package com.pixelkeys.ime.ai
 
 import com.pixelkeys.ime.data.local.CustomThemeEntity
+import com.pixelkeys.ime.data.prefs.AiProvider
+import com.pixelkeys.ime.data.prefs.KeyboardPreferences
 import com.pixelkeys.ime.theme.KeyTypographyStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,11 +18,12 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.util.UUID
 
 @Serializable
-private data class GeminiThemePayload(
-    val name: String = "Gemini Theme",
+private data class AiThemePayload(
+    val name: String = "AI Theme",
     val boardBg: String = "#121214",
     val keyBg: String = "#1E1E22",
     val modifierBg: String = "#2A2A30",
@@ -39,13 +42,15 @@ object AiRepository {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun generateThemeWithGemini(
+    suspend fun generateTheme(
         prompt: String,
-        apiKey: String
+        prefs: KeyboardPreferences
     ): Result<CustomThemeEntity> = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) {
+        val provider = prefs.aiProvider
+        val apiKey = prefs.apiKeyFor(provider).trim()
+        if (apiKey.isBlank() && provider != AiProvider.CUSTOM) {
             return@withContext Result.failure(
-                IllegalStateException("Add your Gemini API key first (free at aistudio.google.com/apikey).")
+                IllegalStateException("Add your ${provider.displayName} API key in Settings -> AI Service.")
             )
         }
 
@@ -75,24 +80,22 @@ object AiRepository {
                 User prompt: $prompt
             """.trimIndent()
 
-            val rawJson = callGeminiApi(
+            val rawJson = callProvider(
+                provider = provider,
+                baseUrl = prefs.baseUrlFor(provider),
+                model = prefs.modelFor(provider),
                 apiKey = apiKey,
                 prompt = systemPrompt,
                 jsonMode = true
             )
-            val cleaned = rawJson.trim()
-                .removePrefix("```json")
-                .removePrefix("```")
-                .removeSuffix("```")
-                .trim()
-
-            val parsed = json.decodeFromString<GeminiThemePayload>(cleaned)
+            val cleaned = extractJsonObject(rawJson)
+            val parsed = json.decodeFromString<AiThemePayload>(cleaned)
             val safeStyle = runCatching { KeyTypographyStyle.valueOf(parsed.typographyStyle) }
                 .getOrDefault(KeyTypographyStyle.DOT_MATRIX)
 
             CustomThemeEntity(
                 id = "ai_${UUID.randomUUID().toString().take(8)}",
-                name = parsed.name.take(28).ifBlank { "Gemini Theme" },
+                name = parsed.name.take(28).ifBlank { "${provider.displayName} Theme" },
                 prompt = prompt,
                 boardBgArgb = parseHexColor(parsed.boardBg, 0xFF121214),
                 keyBgArgb = parseHexColor(parsed.keyBg, 0xFF1E1E22),
@@ -110,18 +113,23 @@ object AiRepository {
         }
     }
 
-    suspend fun translateWithGemini(
+    suspend fun translate(
         input: String,
-        apiKey: String
+        prefs: KeyboardPreferences
     ): Result<String> = withContext(Dispatchers.IO) {
         val trimmed = input.trim()
         if (trimmed.isEmpty()) return@withContext Result.success("")
-        if (apiKey.isBlank()) {
+
+        val provider = prefs.aiProvider
+        val apiKey = prefs.apiKeyFor(provider).trim()
+        if (apiKey.isBlank() && provider != AiProvider.CUSTOM) {
             val quick = quickPhraseMap[trimmed.lowercase()]
             return@withContext if (quick != null) {
                 Result.success(quick)
             } else {
-                Result.failure(IllegalStateException("Add your Gemini API key in the Themes tab for live EN↔BN translation."))
+                Result.failure(
+                    IllegalStateException("Configure an AI key in Settings -> AI Service for live EN<->BN translation.")
+                )
             }
         }
 
@@ -133,12 +141,81 @@ object AiRepository {
                 Return ONLY the translated text without quotes or explanations.
                 Text: $trimmed
             """.trimIndent()
-            callGeminiApi(apiKey = apiKey, prompt = prompt, jsonMode = false).trim()
+            callProvider(
+                provider = provider,
+                baseUrl = prefs.baseUrlFor(provider),
+                model = prefs.modelFor(provider),
+                apiKey = apiKey,
+                prompt = prompt,
+                jsonMode = false
+            ).trim()
         }
     }
 
-    private fun callGeminiApi(apiKey: String, prompt: String, jsonMode: Boolean): String {
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$apiKey")
+    suspend fun testConnection(prefs: KeyboardPreferences): Result<String> = withContext(Dispatchers.IO) {
+        val provider = prefs.aiProvider
+        val apiKey = prefs.apiKeyFor(provider).trim()
+        val model = prefs.modelFor(provider)
+        if (apiKey.isBlank() && provider != AiProvider.CUSTOM) {
+            return@withContext Result.failure(IllegalStateException("Enter your ${provider.displayName} API key first."))
+        }
+        runCatching {
+            val reply = callProvider(
+                provider = provider,
+                baseUrl = prefs.baseUrlFor(provider),
+                model = model,
+                apiKey = apiKey,
+                prompt = "Reply with only the word OK.",
+                jsonMode = false
+            ).trim()
+            "Connected to ${provider.displayName} ($model): ${reply.take(32)}"
+        }
+    }
+
+    private fun callProvider(
+        provider: AiProvider,
+        baseUrl: String,
+        model: String,
+        apiKey: String,
+        prompt: String,
+        jsonMode: Boolean
+    ): String {
+        return when (provider) {
+            AiProvider.GEMINI -> callGeminiWithFallback(apiKey = apiKey, model = model, prompt = prompt, jsonMode = jsonMode)
+            AiProvider.GROQ,
+            AiProvider.OPENAI,
+            AiProvider.OPENROUTER,
+            AiProvider.CUSTOM -> callOpenAiCompatibleApi(
+                provider = provider,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                model = model,
+                prompt = prompt
+            )
+        }
+    }
+
+    private fun callGeminiWithFallback(
+        apiKey: String,
+        model: String,
+        prompt: String,
+        jsonMode: Boolean
+    ): String {
+        val primaryModel = model.trim().ifBlank { AiProvider.GEMINI.defaultModel }
+        return try {
+            callGeminiApi(apiKey = apiKey, model = primaryModel, prompt = prompt, jsonMode = jsonMode)
+        } catch (_: GeminiNotFoundException) {
+            val fallback = if (primaryModel != "gemini-2.5-flash") "gemini-2.5-flash" else "gemini-2.0-flash"
+            callGeminiApi(apiKey = apiKey, model = fallback, prompt = prompt, jsonMode = jsonMode)
+        }
+    }
+
+    private class GeminiNotFoundException(message: String) : IllegalStateException(message)
+
+    private fun callGeminiApi(apiKey: String, model: String, prompt: String, jsonMode: Boolean): String {
+        val encodedKey = URLEncoder.encode(apiKey.trim(), "UTF-8")
+        val cleanModel = model.trim().removePrefix("models/")
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent?key=$encodedKey")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
@@ -173,17 +250,99 @@ object AiRepository {
         val responseText = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
 
         if (code !in 200..299) {
-            throw IllegalStateException("Gemini API error ($code): ${responseText.take(180)}")
+            val detail = extractApiErrorMessage(responseText)
+            if (code == 404) {
+                throw GeminiNotFoundException("Gemini model '$cleanModel' unavailable (404): $detail")
+            }
+            throw IllegalStateException("Gemini API error ($code): $detail")
         }
 
         val root = json.parseToJsonElement(responseText).jsonObject
         val candidates = root["candidates"]?.jsonArray
             ?: throw IllegalStateException("No candidates returned from Gemini")
-        val text = candidates[0].jsonObject["content"]?.jsonObject
-            ?.get("parts")?.jsonArray?.get(0)?.jsonObject
+        return candidates.firstOrNull()?.jsonObject?.get("content")?.jsonObject
+            ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
             ?.get("text")?.jsonPrimitive?.content
             ?: throw IllegalStateException("Empty Gemini response")
-        return text
+    }
+
+    private fun callOpenAiCompatibleApi(
+        provider: AiProvider,
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        prompt: String
+    ): String {
+        val cleanBase = baseUrl.trim().trimEnd('/')
+        val endpoint = if (cleanBase.endsWith("/chat/completions")) {
+            cleanBase
+        } else {
+            "$cleanBase/chat/completions"
+        }
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            if (apiKey.isNotBlank()) {
+                setRequestProperty("Authorization", "Bearer ${apiKey.trim()}")
+            }
+            if (provider == AiProvider.OPENROUTER) {
+                setRequestProperty("HTTP-Referer", "https://github.com/miadandullah-bit/Piexlkeys")
+                setRequestProperty("X-Title", "Pixelkeys")
+            }
+        }
+
+        val bodyJson = buildJsonObject {
+            put("model", model.trim().ifBlank { provider.defaultModel })
+            put("temperature", 0.4)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }
+
+        conn.outputStream.use { os ->
+            os.write(json.encodeToString(JsonObject.serializer(), bodyJson).toByteArray(Charsets.UTF_8))
+        }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val responseText = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+        if (code !in 200..299) {
+            val detail = extractApiErrorMessage(responseText)
+            throw IllegalStateException("${provider.displayName} API error ($code): $detail")
+        }
+
+        val root = json.parseToJsonElement(responseText).jsonObject
+        val choices = root["choices"]?.jsonArray
+            ?: throw IllegalStateException("No choices returned from ${provider.displayName}")
+        return choices.firstOrNull()?.jsonObject
+            ?.get("message")?.jsonObject
+            ?.get("content")?.jsonPrimitive?.content
+            ?: throw IllegalStateException("Empty ${provider.displayName} response")
+    }
+
+    private fun extractApiErrorMessage(raw: String): String {
+        val parsed = runCatching {
+            json.parseToJsonElement(raw).jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+        }.getOrNull()
+        return (parsed ?: raw).trim().take(200).ifBlank { "Unknown API error" }
+    }
+
+    private fun extractJsonObject(raw: String): String {
+        val trimmed = raw.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        val start = trimmed.indexOf('{')
+        val end = trimmed.lastIndexOf('}')
+        return if (start >= 0 && end > start) trimmed.substring(start, end + 1) else trimmed
     }
 
     private fun parseHexColor(hex: String, fallback: Long): Long {

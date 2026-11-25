@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Numbers
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,6 +43,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,12 +65,14 @@ import androidx.compose.ui.unit.sp
 import com.pixelkeys.ime.ai.AiRepository
 import com.pixelkeys.ime.data.local.ClipboardDao
 import com.pixelkeys.ime.data.local.ClipboardItemEntity
+import com.pixelkeys.ime.data.local.ClipboardSyncManager
 import com.pixelkeys.ime.data.prefs.InputLanguage
 import com.pixelkeys.ime.data.prefs.KeyboardPreferences
 import com.pixelkeys.ime.data.prefs.OneHandedMode
 import com.pixelkeys.ime.data.prefs.PreferencesRepository
 import com.pixelkeys.ime.engine.VoiceTypingController
 import com.pixelkeys.ime.theme.KeyboardThemeSpec
+import com.pixelkeys.ime.theme.contrastTextOn
 import kotlinx.coroutines.launch
 
 @Composable
@@ -180,8 +184,9 @@ fun EmojiKaomojiDrawer(
                 ) {
                     Text(
                         text = title,
-                        color = if (selected) Color.White else theme.secondaryText,
+                        color = if (selected) contrastTextOn(theme.accentColor) else theme.secondaryText,
                         fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         fontFamily = theme.keyFontFamily()
                     )
                 }
@@ -284,13 +289,20 @@ fun ClipboardDrawer(
     theme: KeyboardThemeSpec,
     items: List<ClipboardItemEntity>,
     clipboardDao: ClipboardDao,
+    clipboardSyncManager: ClipboardSyncManager,
     onPaste: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val systemClip by clipboardSyncManager.lastSystemClip.collectAsState()
+
+    LaunchedEffect(Unit) {
+        clipboardSyncManager.syncNow(forceCapture = false)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(210.dp)
+            .height(225.dp)
             .background(theme.boardBackground)
             .padding(8.dp)
     ) {
@@ -305,19 +317,78 @@ fun ClipboardDrawer(
                 fontSize = 11.sp,
                 fontFamily = theme.keyFontFamily()
             )
-            Text(
-                text = "Clear Unpinned",
-                color = theme.accentColor,
-                fontSize = 11.sp,
-                modifier = Modifier.clickable {
-                    scope.launch { clipboardDao.clearUnpinned() }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { clipboardSyncManager.syncNow(forceCapture = true) }
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Outlined.Refresh,
+                        contentDescription = "Sync clipboard",
+                        tint = theme.keyText,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text("Sync", color = theme.keyText, fontSize = 11.sp)
                 }
-            )
+                Text(
+                    text = "Clear Unpinned",
+                    color = theme.accentColor,
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable {
+                        scope.launch { clipboardDao.clearUnpinned() }
+                    }
+                )
+            }
         }
+
+        if (!systemClip.isNullOrBlank() && items.none { it.text == systemClip }) {
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(theme.modifierSurface)
+                    .border(1.dp, theme.accentColor, RoundedCornerShape(8.dp))
+                    .clickable {
+                        val clipText = systemClip!!
+                        scope.launch { clipboardSyncManager.saveClipText(clipText) }
+                        onPaste(clipText)
+                    }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SYSTEM: $systemClip",
+                    color = theme.keyText,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "PASTE",
+                    color = theme.accentColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+
         Spacer(Modifier.height(6.dp))
         if (items.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No saved clips yet", color = theme.secondaryText, fontSize = 13.sp)
+                Text(
+                    text = "No saved clips yet. Copy any text or tap Sync.",
+                    color = theme.secondaryText,
+                    fontSize = 12.sp
+                )
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -425,8 +496,9 @@ fun ResizeDrawer(
                 ) {
                     Text(
                         text = mode.name,
-                        color = if (selected) Color.White else theme.keyText,
+                        color = if (selected) contrastTextOn(theme.accentColor) else theme.keyText,
                         fontSize = 11.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                         fontFamily = theme.keyFontFamily()
                     )
                 }
@@ -498,7 +570,7 @@ fun TranslateDrawer(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "GEMINI EN ↔ BN TRANSLATOR",
+            text = "${prefs.aiProvider.displayName.uppercase()} · EN <-> BN TRANSLATOR",
             color = theme.secondaryText,
             fontSize = 11.sp,
             fontFamily = theme.keyFontFamily()
@@ -527,7 +599,7 @@ fun TranslateDrawer(
                         loading = true
                         errorMsg = null
                         scope.launch {
-                            AiRepository.translateWithGemini(input, prefs.geminiApiKey)
+                            AiRepository.translate(input, prefs)
                                 .onSuccess { output = it }
                                 .onFailure { errorMsg = it.message }
                             loading = false

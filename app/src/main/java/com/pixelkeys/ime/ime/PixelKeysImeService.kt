@@ -53,6 +53,8 @@ class PixelKeysImeService : InputMethodService(),
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
         val app = application as PixelKeysApp
+        app.clipboardSyncManager.startListening()
+
         val adapter = InputConnectionTargetAdapter(
             inputConnectionProvider = { currentInputConnection },
             editorInfoProvider = { currentInputEditorInfo }
@@ -70,6 +72,7 @@ class PixelKeysImeService : InputMethodService(),
         serviceScope.launch {
             app.preferencesRepository.preferencesFlow.collect { prefs ->
                 keyboardController.updatePreferences(prefs)
+                app.clipboardSyncManager.autoCaptureEnabled = prefs.clipboardAutoCapture
             }
         }
     }
@@ -82,6 +85,7 @@ class PixelKeysImeService : InputMethodService(),
     override fun onStartInputView(editorInfo: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(editorInfo, restarting)
         keyboardController.resetSession()
+        (application as PixelKeysApp).clipboardSyncManager.syncNow()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
     }
@@ -120,7 +124,7 @@ class PixelKeysImeService : InputMethodService(),
                     "dynamic_you" -> dynamicYou
                     else -> BuiltInThemes.allBuiltIns.firstOrNull { it.id == prefs.activeThemeId }
                         ?: customThemes.firstOrNull { it.id == prefs.activeThemeId }?.toThemeSpec()
-                        ?: BuiltInThemes.NothingDark
+                        ?: BuiltInThemes.PixelBlock
                 }
 
                 PixelKeysBoard(
@@ -130,6 +134,7 @@ class PixelKeysImeService : InputMethodService(),
                     theme = theme,
                     clipboardItems = clipboardItems,
                     clipboardDao = app.database.clipboardDao(),
+                    clipboardSyncManager = app.clipboardSyncManager,
                     voiceController = voiceController
                 )
             }
@@ -137,6 +142,7 @@ class PixelKeysImeService : InputMethodService(),
     }
 
     override fun onDestroy() {
+        (application as PixelKeysApp).clipboardSyncManager.stopListening()
         voiceController.stopListening()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         store.clear()

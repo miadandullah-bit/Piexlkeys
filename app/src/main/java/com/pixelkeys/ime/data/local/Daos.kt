@@ -29,6 +29,9 @@ interface ClipboardDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: ClipboardItemEntity)
 
+    @Query("UPDATE clipboard_items SET timestamp = :timestamp WHERE id = :id")
+    suspend fun touchItem(id: Long, timestamp: Long)
+
     @Query("UPDATE clipboard_items SET isPinned = :pinned WHERE id = :id")
     suspend fun setPinned(id: Long, pinned: Boolean)
 
@@ -37,6 +40,13 @@ interface ClipboardDao {
 
     @Query("DELETE FROM clipboard_items WHERE isPinned = 0")
     suspend fun clearUnpinned()
+
+    @Query(
+        "DELETE FROM clipboard_items WHERE isPinned = 0 AND id NOT IN (" +
+            "SELECT id FROM clipboard_items WHERE isPinned = 0 ORDER BY timestamp DESC LIMIT :limit" +
+            ")"
+    )
+    suspend fun trimUnpinned(limit: Int)
 }
 
 @Dao

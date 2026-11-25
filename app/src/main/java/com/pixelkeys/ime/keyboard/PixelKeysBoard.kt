@@ -54,18 +54,21 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import kotlin.math.roundToInt
 import com.pixelkeys.ime.data.local.ClipboardDao
 import com.pixelkeys.ime.data.local.ClipboardItemEntity
+import com.pixelkeys.ime.data.local.ClipboardSyncManager
 import com.pixelkeys.ime.data.prefs.KeyboardPreferences
 import com.pixelkeys.ime.data.prefs.OneHandedMode
 import com.pixelkeys.ime.data.prefs.PreferencesRepository
 import com.pixelkeys.ime.engine.VoiceTypingController
+import com.pixelkeys.ime.theme.DotMatrixText
 import com.pixelkeys.ime.theme.KeyboardThemeSpec
+import com.pixelkeys.ime.theme.contrastTextOn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private data class KeyPreviewState(
     val keyId: String,
@@ -83,10 +86,10 @@ fun PixelKeysBoard(
     theme: KeyboardThemeSpec,
     clipboardItems: List<ClipboardItemEntity>,
     clipboardDao: ClipboardDao,
+    clipboardSyncManager: ClipboardSyncManager,
     voiceController: VoiceTypingController,
     modifier: Modifier = Modifier
 ) {
-    // Scope state slices so typing does not recompose the entire key grid unnecessarily
     val suggestions by remember(controller) {
         controller.uiState.map { it.suggestions }.distinctUntilChanged()
     }.collectAsState(initial = emptyList())
@@ -153,7 +156,12 @@ fun PixelKeysBoard(
                     UtilityDrawer.EMOJI_KAOMOJI -> EmojiKaomojiDrawer(theme) {
                         controller.commitTextDirectly(it)
                     }
-                    UtilityDrawer.CLIPBOARD -> ClipboardDrawer(theme, clipboardItems, clipboardDao) {
+                    UtilityDrawer.CLIPBOARD -> ClipboardDrawer(
+                        theme = theme,
+                        items = clipboardItems,
+                        clipboardDao = clipboardDao,
+                        clipboardSyncManager = clipboardSyncManager
+                    ) {
                         controller.commitTextDirectly(it)
                     }
                     UtilityDrawer.RESIZE -> ResizeDrawer(theme, prefs, prefsRepo)
@@ -164,7 +172,6 @@ fun PixelKeysBoard(
                 }
             }
 
-            // Default key height increased to 54.dp for comfortable typing
             val keyHeight = (54f * prefs.heightScale).dp
 
             Column(
@@ -173,14 +180,16 @@ fun PixelKeysBoard(
                     .padding(horizontal = 5.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                rows.forEach { rowKeys ->
+                rows.forEachIndexed { rowIndex, rowKeys ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        rowKeys.forEach { key ->
+                        rowKeys.forEachIndexed { colIndex, key ->
                             KeyCap(
                                 key = key,
+                                rowIndex = rowIndex,
+                                colIndex = colIndex,
                                 theme = theme,
                                 keyFontSizeSp = prefs.keyFontSizeSp,
                                 isTrackpadMode = isTrackpadMode,
@@ -208,7 +217,7 @@ fun PixelKeysBoard(
             }
         }
 
-        // Single zero-lag Compose key preview bubble (no Android WindowManager Popup overhead)
+        // Zero-lag Compose key preview bubble
         activePreview?.let { preview ->
             val bubbleW = 46.dp
             val bubbleH = 46.dp
@@ -231,12 +240,12 @@ fun PixelKeysBoard(
                     .border(1.5.dp, theme.accentColor, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
+                DotMatrixText(
                     text = preview.text,
-                    color = if (preview.isSecondary) Color.White else theme.keyText,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = theme.keyFontFamily()
+                    color = if (preview.isSecondary) contrastTextOn(theme.accentColor) else theme.keyText,
+                    fontSize = 22.sp,
+                    typographyStyle = theme.typographyStyle,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
@@ -275,11 +284,11 @@ private fun TopSuggestionBar(
         ) {
             if (suggestions.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "•  •  •",
-                        color = theme.secondaryText.copy(alpha = 0.5f),
+                    DotMatrixText(
+                        text = "• • •",
+                        color = theme.secondaryText.copy(alpha = 0.55f),
                         fontSize = 12.sp,
-                        fontFamily = theme.keyFontFamily()
+                        typographyStyle = theme.typographyStyle
                     )
                 }
             } else {
@@ -287,9 +296,9 @@ private fun TopSuggestionBar(
                     if (index > 0) {
                         Box(
                             modifier = Modifier
-                                .width(1.dp)
+                                .width(1.5.dp)
                                 .height(16.dp)
-                                .background(theme.borderColor)
+                                .background(theme.suggestionDividerColor)
                         )
                     }
                     Box(
@@ -300,12 +309,12 @@ private fun TopSuggestionBar(
                             .padding(vertical = 6.dp, horizontal = 4.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
+                        DotMatrixText(
                             text = word,
                             color = if (index == 0) theme.keyText else theme.secondaryText,
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
+                            typographyStyle = theme.typographyStyle,
                             fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Normal,
-                            fontFamily = theme.keyFontFamily(),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -328,6 +337,8 @@ private fun TopSuggestionBar(
 @Composable
 private fun KeyCap(
     key: KeySpec,
+    rowIndex: Int,
+    colIndex: Int,
     theme: KeyboardThemeSpec,
     keyFontSizeSp: Float,
     isTrackpadMode: Boolean,
@@ -357,21 +368,37 @@ private fun KeyCap(
     val currentOnPreviewShow by rememberUpdatedState(onPreviewShow)
     val currentOnPreviewHide by rememberUpdatedState(onPreviewHide)
 
-    val shape = if (key.type == KeyType.ACTION) CircleShape else RoundedCornerShape(theme.keyCornerRadiusDp.dp)
-    val baseBg = when (key.type) {
-        KeyType.ACTION -> theme.actionSurface
-        KeyType.SHIFT -> if (shiftState != ShiftState.OFF) theme.accentColor.copy(alpha = 0.25f) else theme.modifierSurface
-        KeyType.BACKSPACE, KeyType.SYMBOLS, KeyType.EMOJI, KeyType.LANGUAGE -> theme.modifierSurface
-        KeyType.SPACE -> if (isTrackpadMode) theme.accentColor.copy(alpha = 0.22f) else theme.keySurface
-        KeyType.CHAR -> theme.keySurface
+    val isColorBlock = !theme.keyColorBlocks.isNullOrEmpty()
+    val shape = if (key.type == KeyType.ACTION && !isColorBlock) {
+        CircleShape
+    } else {
+        RoundedCornerShape(theme.keyCornerRadiusDp.dp)
+    }
+
+    val swatch = theme.resolveKeySwatch(
+        rowIndex = rowIndex,
+        colIndex = colIndex,
+        key = key,
+        isShiftActive = shiftState != ShiftState.OFF
+    )
+
+    val baseBg = if (key.type == KeyType.SPACE && isTrackpadMode) {
+        theme.accentColor.copy(alpha = 0.25f)
+    } else {
+        swatch.background
     }
     val bgColor = if (isPressed) {
-        if (key.type == KeyType.ACTION) theme.actionSurface.copy(alpha = 0.8f)
+        if (key.type == KeyType.ACTION || isColorBlock) baseBg.copy(alpha = 0.78f)
         else theme.accentColor.copy(alpha = 0.28f)
     } else {
         baseBg
     }
-    val textColor = if (key.type == KeyType.ACTION) Color.White else theme.keyText
+    val textColor = swatch.text
+    val secondaryHintColor = if (isColorBlock) {
+        swatch.text.copy(alpha = 0.72f)
+    } else {
+        theme.secondaryText
+    }
 
     fun updatePreview(isSecondary: Boolean) {
         val kSpec = currentKey
@@ -406,11 +433,7 @@ private fun KeyCap(
             .background(bgColor)
             .border(
                 width = if (isPressed) 1.5.dp else if (theme.isHardwareBevel) 1.2.dp else 0.7.dp,
-                color = when {
-                    isPressed -> theme.accentColor
-                    key.type == KeyType.ACTION -> theme.actionSurface
-                    else -> theme.borderColor
-                },
+                color = if (isPressed) theme.accentColor else swatch.border,
                 shape = shape
             )
             .pointerInput(key.id) {
@@ -484,35 +507,36 @@ private fun KeyCap(
         contentAlignment = Alignment.Center
     ) {
         if (isTrackpadMode && key.type != KeyType.SPACE) {
-            Text(
+            DotMatrixText(
                 text = "•",
-                color = theme.secondaryText.copy(alpha = 0.45f),
-                fontSize = 14.sp
+                color = secondaryHintColor.copy(alpha = 0.55f),
+                fontSize = 14.sp,
+                typographyStyle = theme.typographyStyle
             )
         } else {
             Box(modifier = Modifier.fillMaxSize().padding(3.dp)) {
                 if (key.secondaryLabel != null) {
-                    Text(
+                    DotMatrixText(
                         text = key.secondaryLabel,
-                        color = theme.secondaryText,
-                        fontSize = 9.sp,
-                        fontFamily = theme.keyFontFamily(),
+                        color = secondaryHintColor,
+                        fontSize = 8.5.sp,
+                        typographyStyle = theme.typographyStyle,
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(end = 2.dp)
-                            .alpha(0.8f)
+                            .alpha(0.85f)
                     )
                 }
-                Text(
+                DotMatrixText(
                     text = if (isTrackpadMode && key.type == KeyType.SPACE) "◀  trackpad  ▶" else key.label,
                     color = textColor,
                     fontSize = when (key.type) {
-                        KeyType.SPACE -> 12.sp
-                        KeyType.SYMBOLS, KeyType.LANGUAGE -> 13.sp
+                        KeyType.SPACE -> 11.sp
+                        KeyType.SYMBOLS, KeyType.LANGUAGE -> 12.sp
                         else -> keyFontSizeSp.sp
                     },
+                    typographyStyle = theme.typographyStyle,
                     fontWeight = if (key.type == KeyType.ACTION) FontWeight.Bold else FontWeight.Medium,
-                    fontFamily = theme.keyFontFamily(),
                     maxLines = 1,
                     modifier = Modifier.align(Alignment.Center)
                 )
